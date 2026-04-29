@@ -1,0 +1,59 @@
+{
+  "expo": {
+    "name": "PictureToSMS",
+    "slug": "PictureToSMS",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "plugins": [
+      [
+        "expo-image-picker",
+        {
+          "cameraPermission": "Allow $(PRODUCT_NAME) to use the camera to take a photo for AI analysis.",
+          "photosPermission": "Allow $(PRODUCT_NAME) to access photos if you pick from the library."
+        }
+      ],
+      "expo-secure-store"
+    ],
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.picturetosms.app",
+      "infoPlist": {
+        "NSCameraUsageDescription": "This app needs the camera to take a picture to send to ChatGPT.",
+        "NSPhotoLibraryUsageDescription": "Optional access if you choose a photo from your library."
+      }
+    },
+    "android": {
+      "package": "com.picturetosms.app",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#ffffff"
+      },
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.SEND_SMS",
+        "android.permission.READ_PHONE_STATE",
+        "android.permission.INTERNET",
+        "android.permission.RECORD_AUDIO"
+      ],
+      "edgeToEdgeEnabled": true,
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "6002d51d-b645-4e40-b1f8-b0f0be22a7e3"
+      }
+    },
+    "owner": "vadaa"
+  }
+}

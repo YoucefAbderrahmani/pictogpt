@@ -1,0 +1,52 @@
+PICTURE TO SMS — BACKEND + APK
+
+1) DEPLOY THE API (so the app works on any Wi‑Fi / mobile data)
+
+   Option A — Railway (example)
+   - Create a new project, add a service from this repo.
+   - Set the service root folder to: server
+   - Build uses server/Dockerfile automatically when Dockerfile is present.
+   - Variables (service → Variables):
+       GEMINI_API_KEY = your Gemini API key
+       CLIENT_BEARER_TOKEN = any long random secret (recommended)
+   - Deploy, then copy the public HTTPS URL (e.g. https://something.up.railway.app).
+
+   Option B — run on your PC for testing only
+   - cd server
+   - copy .env.example to .env and fill values
+   - npm install && npm start
+   - Your phone must reach that PC (same LAN + firewall); not ideal outside home.
+
+   Health check: GET https://YOUR_URL/health  →  {"ok":true}
+
+2) BUILD THE APK (Expo EAS — needs a free Expo account)
+
+   From the PictureToSMS folder (this app, not server):
+
+   npm install
+   npx eas login
+   npx eas init          (links the app once; follow prompts)
+   npm run eas:apk       (same as: eas build --platform android --profile preview)
+
+   When the build finishes, open the build page in the browser and download the .apk
+   (profile "preview" in eas.json is set to APK, not Play Store bundle).
+
+   CI / no browser: create an EXPO_TOKEN at expo.dev, then:
+   set EXPO_TOKEN=...   (PowerShell: $env:EXPO_TOKEN="...")
+   npx eas build --platform android --profile preview --non-interactive
+
+3) ON THE PHONE AFTER INSTALL
+
+   - Open the app.
+   - Backend API URL = your deployed URL (no trailing slash required).
+   - App secret = same value as CLIENT_BEARER_TOKEN (leave blank only if you did not set it on the server).
+   - SMS number + prompt as before.
+
+4) LOCAL APK WITHOUT EAS (if you have Android Studio + JDK)
+
+   - Install JDK 17+, set JAVA_HOME, install Android SDK (ANDROID_HOME).
+   - npx expo prebuild --platform android
+   - cd android && gradlew.bat assembleRelease
+   - APK path: android\app\build\outputs\apk\release\app-release.apk
+   - You must sign the release (configure signing in Android docs) for a installable release build;
+     EAS handles signing for you when you use eas build.
