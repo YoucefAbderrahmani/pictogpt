@@ -25,47 +25,6 @@ function toQcmSmsFormat(rawText) {
   return letters.join('-');
 }
 
-async function sendSmsWithTwilio({ to, body }) {
-  const accountSid = process.env.TWILIO_ACCOUNT_SID;
-  const authToken = process.env.TWILIO_AUTH_TOKEN;
-  const fromPhone = process.env.TWILIO_FROM_NUMBER;
-  const serviceSid = process.env.TWILIO_MESSAGING_SERVICE_SID;
-
-  if (!accountSid || !authToken || (!fromPhone && !serviceSid)) {
-    throw new Error(
-      'Missing Twilio configuration. Set TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, and TWILIO_FROM_NUMBER (or TWILIO_MESSAGING_SERVICE_SID).'
-    );
-  }
-
-  const params = new URLSearchParams();
-  params.set('To', to);
-  params.set('Body', body);
-  if (serviceSid) {
-    params.set('MessagingServiceSid', serviceSid);
-  } else {
-    params.set('From', fromPhone);
-  }
-
-  const basicAuth = Buffer.from(`${accountSid}:${authToken}`).toString('base64');
-  const twilioRes = await fetch(
-    `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`,
-    {
-      method: 'POST',
-      headers: {
-        Authorization: `Basic ${basicAuth}`,
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: params.toString(),
-    }
-  );
-
-  const twilioJson = await twilioRes.json().catch(() => ({}));
-  if (!twilioRes.ok) {
-    const msg = twilioJson?.message || `Twilio error (${twilioRes.status})`;
-    throw new Error(msg);
-  }
-}
-
 async function analyzeWithOpenRouter({ key, userPrompt, dataUrl }) {
   const openRouterRes = await fetch('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',
@@ -229,8 +188,7 @@ export default async function handler(req, res) {
       res.status(502).json({ error: 'Could not parse QCM answers from model response' });
       return;
     }
-    await sendSmsWithTwilio({ to: toPhoneNumber.trim(), body: smsBody });
-    res.status(200).json({ text: content, sms: 'sent', smsBody });
+    res.status(200).json({ text: content, smsBody });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     res.status(500).json({ error: message });

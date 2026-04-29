@@ -4,6 +4,7 @@ import {
   ActivityIndicator,
   Alert,
   KeyboardAvoidingView,
+  PermissionsAndroid,
   Platform,
   Pressable,
   ScrollView,
@@ -41,7 +42,7 @@ async function callBackendAnalyze(
   mimeType: string,
   userPrompt: string,
   qcmMode: boolean
-): Promise<string> {
+): Promise<{ text: string; smsBody?: string }> {
   const candidates = getBackendCandidates(backendBaseUrl);
   if (!candidates.length) {
     throw new Error('Backend URL is empty.');
@@ -76,10 +77,11 @@ async function callBackendAnalyze(
         throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg));
       }
       const text = (json as { text?: string })?.text;
+      const smsBody = (json as { smsBody?: string })?.smsBody;
       if (!text || typeof text !== 'string') {
         throw new Error('Invalid response from backend.');
       }
-      return text.trim();
+      return { text: text.trim(), smsBody };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (
@@ -98,6 +100,29 @@ async function callBackendAnalyze(
       ', '
     )}. Make sure URL is public and reachable from phone. ${lastNetworkError ?? ''}`.trim()
   );
+}
+
+function sendDirectSmsAndroid(to: string, body: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const SmsAndroid = require('react-native-sms-android');
+    SmsAndroid.sms(
+      to,
+      body,
+      'sendDirect',
+      (err: unknown, message: string) => {
+        if (err) {
+          reject(new Error(typeof err === 'string' ? err : 'Failed to send SMS'));
+          return;
+        }
+        if (typeof message === 'string' && message.toLowerCase().includes('cancel')) {
+          reject(new Error('SMS sending was cancelled'));
+          return;
+        }
+        resolve();
+      }
+    );
+  });
 }
 
 export default function App() {
@@ -147,6 +172,10 @@ export default function App() {
       return;
     }
     const normalized = phone.trim();
+    if (Platform.OS !== 'android') {
+      Alert.alert('Android only', 'Direct automatic SMS is supported only on Android.');
+      return;
+    }
 
     setBusy(true);
     setStatus('Opening camera…');
@@ -181,7 +210,7 @@ export default function App() {
 
       setStatus('Sending image to your backend…');
       const effectivePrompt = qcmMode ? QCM_PROMPT : prompt;
-      await callBackendAnalyze(
+      const backendResult = await callBackendAnalyze(
         backendUrl,
         bearerToken || null,
         normalized,
@@ -190,7 +219,22 @@ export default function App() {
         effectivePrompt,
         qcmMode
       );
-      setStatus('Done. SMS sent automatically by backend.');
+
+      const smsBody = backendResult.smsBody || backendResult.text;
+      if (!smsBody?.trim()) {
+        throw new Error('Backend returned no SMS content.');
+      }
+
+      const granted = await PermissionsAndroid.request(
+        PermissionsAndroid.PERMISSIONS.SEND_SMS
+      );
+      if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
+        throw new Error('SEND_SMS permission denied.');
+      }
+
+      setStatus('Sending SMS automatically on Android…');
+      await sendDirectSmsAndroid(normalized, smsBody.trim());
+      setStatus('Done. SMS sent automatically.');
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       setStatus(`Error: ${message}`);
@@ -282,9 +326,8 @@ export default function App() {
         {status ? <Text style={styles.status}>{status}</Text> : null}
 
         <Text style={styles.note}>
-          Deploy the server in the server folder, set OPENROUTER_API_KEY (and optional CLIENT_BEARER_TOKEN),
-          and configure Twilio env vars for automatic SMS. Then paste the public URL here. Settings are
-          stored on this device only. Use a real phone for camera.
+          Deploy the backend and set OPENROUTER_API_KEY (optional GEMINI_API_KEY fallback). On Android,
+          this app sends SMS directly after image analysis using SEND_SMS permission.
         </Text>
       </ScrollView>
       <StatusBar style="light" />
