@@ -2,16 +2,28 @@ PICTURE TO SMS — BACKEND + APK
 
 1) DEPLOY THE API (so the app works on any Wi‑Fi / mobile data)
 
-   Option A — Railway (example)
+   Option A — Vercel (recommended)
+   - Import this GitHub repo in Vercel.
+   - Framework preset: Other (no special framework required).
+   - Root directory: project root (PictureToSMS), not server.
+   - Add environment variables in Vercel project settings:
+       GEMINI_API_KEY = your Gemini API key
+       CLIENT_BEARER_TOKEN = any long random secret (recommended)
+   - Deploy, then copy the public HTTPS URL (e.g. https://pictogpt.vercel.app).
+   - The app endpoint is already mapped:
+       POST /v1/analyze -> /api/analyze
+       GET /health -> /api/health
+
+   Option B — Railway (alternative)
    - Create a new project, add a service from this repo.
    - Set the service root folder to: server
    - Build uses server/Dockerfile automatically when Dockerfile is present.
-   - Variables (service → Variables):
+   - Variables (service -> Variables):
        GEMINI_API_KEY = your Gemini API key
        CLIENT_BEARER_TOKEN = any long random secret (recommended)
    - Deploy, then copy the public HTTPS URL (e.g. https://something.up.railway.app).
 
-   Option B — run on your PC for testing only
+   Option C — run on your PC for testing only
    - cd server
    - copy .env.example to .env and fill values
    - npm install && npm start
