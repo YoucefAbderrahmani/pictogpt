@@ -9,6 +9,9 @@ PICTURE TO SMS — BACKEND + APK
    - Add environment variables in Vercel project settings:
        OPENROUTER_API_KEY = your OpenRouter API key (primary)
        GEMINI_API_KEY = your Gemini API key (optional fallback)
+       TWILIO_ACCOUNT_SID = from Twilio console
+       TWILIO_AUTH_TOKEN = from Twilio console
+       TWILIO_FROM_NUMBER = your Twilio SMS number (or use TWILIO_MESSAGING_SERVICE_SID)
        CLIENT_BEARER_TOKEN = any long random secret (recommended)
    - Deploy, then copy the public HTTPS URL (e.g. https://pictogpt.vercel.app).
    - The app endpoint is already mapped:
@@ -22,6 +25,9 @@ PICTURE TO SMS — BACKEND + APK
    - Variables (service -> Variables):
        OPENROUTER_API_KEY = your OpenRouter API key (primary)
        GEMINI_API_KEY = your Gemini API key (optional fallback)
+       TWILIO_ACCOUNT_SID = from Twilio console
+       TWILIO_AUTH_TOKEN = from Twilio console
+       TWILIO_FROM_NUMBER = your Twilio SMS number (or use TWILIO_MESSAGING_SERVICE_SID)
        CLIENT_BEARER_TOKEN = any long random secret (recommended)
    - Deploy, then copy the public HTTPS URL (e.g. https://something.up.railway.app).
 
@@ -54,7 +60,7 @@ PICTURE TO SMS — BACKEND + APK
    - Open the app.
    - Backend API URL = your deployed URL (no trailing slash required).
    - App secret = same value as CLIENT_BEARER_TOKEN (leave blank only if you did not set it on the server).
-   - SMS number + prompt as before.
+   - SMS number + prompt as before (SMS is sent automatically by backend via Twilio).
 
 4) LOCAL APK WITHOUT EAS (if you have Android Studio + JDK)
 

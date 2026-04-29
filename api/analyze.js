@@ -15,6 +15,57 @@ function isAuthorized(req) {
   return token === expected;
 }
 
+function toQcmSmsFormat(rawText) {
+  const text = String(rawText || '').toUpperCase();
+  const pairs = [...text.matchAll(/(\d+)\s*[:.)-]?\s*([ABCD])/g)];
+  if (pairs.length > 0) {
+    return pairs.map((m) => m[2]).join('-');
+  }
+  const letters = text.match(/[ABCD]/g) || [];
+  return letters.join('-');
+}
+
+async function sendSmsWithTwilio({ to, body }) {
+  const accountSid = process.env.TWILIO_ACCOUNT_SID;
+  const authToken = process.env.TWILIO_AUTH_TOKEN;
+  const fromPhone = process.env.TWILIO_FROM_NUMBER;
+  const serviceSid = process.env.TWILIO_MESSAGING_SERVICE_SID;
+
+  if (!accountSid || !authToken || (!fromPhone && !serviceSid)) {
+    throw new Error(
+      'Missing Twilio configuration. Set TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, and TWILIO_FROM_NUMBER (or TWILIO_MESSAGING_SERVICE_SID).'
+    );
+  }
+
+  const params = new URLSearchParams();
+  params.set('To', to);
+  params.set('Body', body);
+  if (serviceSid) {
+    params.set('MessagingServiceSid', serviceSid);
+  } else {
+    params.set('From', fromPhone);
+  }
+
+  const basicAuth = Buffer.from(`${accountSid}:${authToken}`).toString('base64');
+  const twilioRes = await fetch(
+    `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Basic ${basicAuth}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: params.toString(),
+    }
+  );
+
+  const twilioJson = await twilioRes.json().catch(() => ({}));
+  if (!twilioRes.ok) {
+    const msg = twilioJson?.message || `Twilio error (${twilioRes.status})`;
+    throw new Error(msg);
+  }
+}
+
 async function analyzeWithOpenRouter({ key, userPrompt, dataUrl }) {
   const openRouterRes = await fetch('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',
@@ -132,7 +183,11 @@ export default async function handler(req, res) {
     return;
   }
 
-  const { imageBase64, mimeType, prompt } = req.body || {};
+  const { toPhoneNumber, imageBase64, mimeType, prompt, qcmMode } = req.body || {};
+  if (!toPhoneNumber || typeof toPhoneNumber !== 'string') {
+    res.status(400).json({ error: 'toPhoneNumber is required' });
+    return;
+  }
   if (!imageBase64 || typeof imageBase64 !== 'string') {
     res.status(400).json({ error: 'imageBase64 is required' });
     return;
@@ -169,7 +224,13 @@ export default async function handler(req, res) {
       return;
     }
 
-    res.status(200).json({ text: content });
+    const smsBody = qcmMode ? toQcmSmsFormat(content) : content;
+    if (!smsBody) {
+      res.status(502).json({ error: 'Could not parse QCM answers from model response' });
+      return;
+    }
+    await sendSmsWithTwilio({ to: toPhoneNumber.trim(), body: smsBody });
+    res.status(200).json({ text: content, sms: 'sent', smsBody });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     res.status(500).json({ error: message });

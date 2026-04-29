@@ -14,7 +14,6 @@ import {
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import * as SecureStore from 'expo-secure-store';
-import * as SMS from 'expo-sms';
 
 const KEY_BACKEND = 'picture_to_sms_backend_url';
 const KEY_BEARER = 'picture_to_sms_bearer';
@@ -22,6 +21,8 @@ const KEY_PHONE = 'picture_to_sms_phone';
 
 const DEFAULT_PROMPT =
   'Describe what you see in this image clearly and concisely. The reply will be sent by SMS, so be direct and avoid markdown.';
+const QCM_PROMPT =
+  'You are solving a multiple-choice questionnaire (QCM) from the provided image. Extract the best answer for each question in order. Return answers in compact form like 1A2B3C4D. No explanation, no markdown, no extra text.';
 
 function getBackendCandidates(raw: string): string[] {
   const base = raw.trim().replace(/\/+$/, '');
@@ -35,9 +36,11 @@ function getBackendCandidates(raw: string): string[] {
 async function callBackendAnalyze(
   backendBaseUrl: string,
   bearerToken: string | null,
+  toPhoneNumber: string,
   base64: string,
   mimeType: string,
-  userPrompt: string
+  userPrompt: string,
+  qcmMode: boolean
 ): Promise<string> {
   const candidates = getBackendCandidates(backendBaseUrl);
   if (!candidates.length) {
@@ -58,9 +61,11 @@ async function callBackendAnalyze(
         method: 'POST',
         headers,
         body: JSON.stringify({
+          toPhoneNumber,
           imageBase64: base64,
           mimeType,
           prompt: userPrompt.trim() || DEFAULT_PROMPT,
+          qcmMode,
         }),
       });
       const json = await res.json().catch(() => ({}));
@@ -100,6 +105,7 @@ export default function App() {
   const [bearerToken, setBearerToken] = useState('');
   const [phone, setPhone] = useState('');
   const [prompt, setPrompt] = useState(DEFAULT_PROMPT);
+  const [qcmMode, setQcmMode] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -142,15 +148,6 @@ export default function App() {
     }
     const normalized = phone.trim();
 
-    const smsOk = await SMS.isAvailableAsync();
-    if (!smsOk) {
-      Alert.alert(
-        'SMS not available',
-        'This device cannot send SMS (common on simulators or some tablets). Try a physical phone.'
-      );
-      return;
-    }
-
     setBusy(true);
     setStatus('Opening camera…');
     try {
@@ -183,15 +180,17 @@ export default function App() {
       await persistSettings();
 
       setStatus('Sending image to your backend…');
-      const answer = await callBackendAnalyze(backendUrl, bearerToken || null, b64, mime, prompt);
-
-      setStatus('Sending SMS…');
-      const smsResult = await SMS.sendSMSAsync([normalized], answer);
-      if (smsResult.result === 'sent') {
-        setStatus('Done. Message sent.');
-      } else {
-        setStatus('SMS was not sent (cancelled or failed).');
-      }
+      const effectivePrompt = qcmMode ? QCM_PROMPT : prompt;
+      await callBackendAnalyze(
+        backendUrl,
+        bearerToken || null,
+        normalized,
+        b64,
+        mime,
+        effectivePrompt,
+        qcmMode
+      );
+      setStatus('Done. SMS sent automatically by backend.');
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       setStatus(`Error: ${message}`);
@@ -199,7 +198,7 @@ export default function App() {
     } finally {
       setBusy(false);
     }
-  }, [backendUrl, bearerToken, phone, prompt, persistSettings]);
+  }, [backendUrl, bearerToken, phone, prompt, qcmMode, persistSettings]);
 
   return (
     <KeyboardAvoidingView
@@ -255,7 +254,18 @@ export default function App() {
           value={prompt}
           onChangeText={setPrompt}
           multiline
+          editable={!qcmMode}
         />
+        <Pressable
+          style={({ pressed }) => [
+            styles.qcmButton,
+            qcmMode && styles.qcmButtonActive,
+            pressed && styles.buttonPressed,
+          ]}
+          onPress={() => setQcmMode((v) => !v)}
+        >
+          <Text style={styles.qcmButtonText}>QCM {qcmMode ? 'ON' : 'OFF'}</Text>
+        </Pressable>
 
         <Pressable
           style={({ pressed }) => [styles.button, pressed && styles.buttonPressed, busy && styles.buttonDisabled]}
@@ -273,8 +283,8 @@ export default function App() {
 
         <Text style={styles.note}>
           Deploy the server in the server folder, set OPENROUTER_API_KEY (and optional CLIENT_BEARER_TOKEN),
-          then paste the public URL here. Settings are stored on this device only. Use a real phone for
-          camera and SMS.
+          and configure Twilio env vars for automatic SMS. Then paste the public URL here. Settings are
+          stored on this device only. Use a real phone for camera.
         </Text>
       </ScrollView>
       <StatusBar style="light" />
@@ -332,6 +342,22 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  qcmButton: {
+    marginTop: 12,
+    backgroundColor: '#334155',
+    paddingVertical: 12,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  qcmButtonActive: {
+    backgroundColor: '#0ea5e9',
+  },
+  qcmButtonText: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '600',
   },
   buttonPressed: {
     opacity: 0.9,
