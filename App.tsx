@@ -23,7 +23,7 @@ const KEY_PHONE = 'picture_to_sms_phone';
 const DEFAULT_PROMPT =
   'Describe what you see in this image clearly and concisely. The reply will be sent by SMS, so be direct and avoid markdown.';
 const QCM_PROMPT =
-  'You are solving a multiple-choice questionnaire (QCM) from the provided image. Read all visible questions and options carefully. For each question, select exactly one best answer from A, B, C, or D. Return ONLY numbered answers in ascending order with no extra text, strictly in this format: 1A2B3C4D5A. Do not skip numbering, do not include explanations.';
+  'You are solving a multiple-choice questionnaire (QCM) from the provided image. Identify every visible question in order and select exactly one answer from A, B, C, D, or E for each question. Return ONLY valid JSON in this exact schema: {"total_questions":<number>,"answers":[{"q":1,"a":"A"},{"q":2,"a":"B"}]}. Rules: q must be continuous starting at 1, sorted ascending, one entry per question, and a must be only A/B/C/D/E. If only one question exists, return one entry only (for example {"total_questions":1,"answers":[{"q":1,"a":"E"}]}). No markdown and no extra text.';
 
 function getBackendCandidates(raw: string): string[] {
   const base = raw.trim().replace(/\/+$/, '');

@@ -17,7 +17,31 @@ function isAuthorized(req) {
 
 function toQcmSmsFormat(rawText) {
   const text = String(rawText || '').toUpperCase();
-  const pairs = [...text.matchAll(/(?:^|[^0-9])(\d{1,3})\s*[:.)-]?\s*([ABCD])(?:[^A-Z]|$)/g)];
+  const jsonMatch = text.match(/\{[\s\S]*\}/);
+  if (jsonMatch) {
+    try {
+      const parsed = JSON.parse(jsonMatch[0]);
+      const answers = Array.isArray(parsed?.answers) ? parsed.answers : [];
+      const normalized = answers
+        .map((a) => ({
+          q: Number(a?.q),
+          a: String(a?.a || '').toUpperCase(),
+        }))
+        .filter((x) => Number.isFinite(x.q) && /^[ABCDE]$/.test(x.a))
+        .sort((x, y) => x.q - y.q)
+        .map((x) => ({ q: x.q, a: x.a }));
+      if (normalized.length > 0) {
+        const contiguous = normalized.every((x, idx) => x.q === idx + 1);
+        if (!contiguous) {
+          return '';
+        }
+        return normalized.map((x) => `${x.q}${x.a}`).join('');
+      }
+    } catch {
+      // fall back to regex parsing
+    }
+  }
+  const pairs = [...text.matchAll(/(?:^|[^0-9])(\d{1,3})\s*[:.)-]?\s*([ABCDE])(?:[^A-Z]|$)/g)];
   if (pairs.length === 0) {
     return '';
   }
@@ -29,8 +53,12 @@ function toQcmSmsFormat(rawText) {
   }
   const ordered = [...byQuestion.entries()]
     .sort((a, b) => a[0] - b[0])
-    .map(([q, ans]) => `${q}${ans}`);
-  return ordered.join('');
+    .map(([q, ans]) => ({ q, ans }));
+  const contiguous = ordered.every((item, idx) => item.q === idx + 1);
+  if (!contiguous) {
+    return '';
+  }
+  return ordered.map((item) => `${item.q}${item.ans}`).join('');
 }
 
 async function analyzeWithOpenRouter({ key, userPrompt, dataUrl }) {
@@ -41,7 +69,7 @@ async function analyzeWithOpenRouter({ key, userPrompt, dataUrl }) {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      model: 'openai/gpt-4o-mini',
+      model: 'openai/gpt-4o',
       messages: [
         {
           role: 'user',
