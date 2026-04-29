@@ -9,7 +9,7 @@
     "web": "expo start --web",
     "eas:apk": "eas build --platform android --profile preview",
     "server": "node server/index.js",
-    "postinstall": "patch-package"
+    "postinstall": "node -e \"if(!process.env.VERCEL){require('child_process').execSync('patch-package',{stdio:'inherit'});}\""
   },
   "dependencies": {
     "expo": "~54.0.33",
