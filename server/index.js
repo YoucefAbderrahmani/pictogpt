@@ -20,12 +20,20 @@ function auth(req) {
 
 function toQcmSmsFormat(rawText) {
   const text = String(rawText || '').toUpperCase();
-  const pairs = [...text.matchAll(/(\d+)\s*[:.)-]?\s*([ABCD])/g)];
-  if (pairs.length > 0) {
-    return pairs.map((m) => m[2]).join('-');
+  const pairs = [...text.matchAll(/(?:^|[^0-9])(\d{1,3})\s*[:.)-]?\s*([ABCD])(?:[^A-Z]|$)/g)];
+  if (pairs.length === 0) {
+    return '';
   }
-  const letters = text.match(/[ABCD]/g) || [];
-  return letters.join('-');
+  const byQuestion = new Map();
+  for (const m of pairs) {
+    const q = Number(m[1]);
+    if (!Number.isFinite(q)) continue;
+    byQuestion.set(q, m[2]);
+  }
+  const ordered = [...byQuestion.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([q, ans]) => `${q}${ans}`);
+  return ordered.join('');
 }
 
 const DEFAULT_PROMPT =

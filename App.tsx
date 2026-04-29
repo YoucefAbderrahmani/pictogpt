@@ -23,7 +23,7 @@ const KEY_PHONE = 'picture_to_sms_phone';
 const DEFAULT_PROMPT =
   'Describe what you see in this image clearly and concisely. The reply will be sent by SMS, so be direct and avoid markdown.';
 const QCM_PROMPT =
-  'You are solving a multiple-choice questionnaire (QCM) from the provided image. Extract the best answer for each question in order. Return answers in compact form like 1A2B3C4D. No explanation, no markdown, no extra text.';
+  'You are solving a multiple-choice questionnaire (QCM) from the provided image. Read all visible questions and options carefully. For each question, select exactly one best answer from A, B, C, or D. Return ONLY numbered answers in ascending order with no extra text, strictly in this format: 1A2B3C4D5A. Do not skip numbering, do not include explanations.';
 
 function getBackendCandidates(raw: string): string[] {
   const base = raw.trim().replace(/\/+$/, '');
