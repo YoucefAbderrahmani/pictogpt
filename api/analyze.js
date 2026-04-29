@@ -15,6 +15,101 @@ function isAuthorized(req) {
   return token === expected;
 }
 
+async function analyzeWithOpenRouter({ key, userPrompt, dataUrl }) {
+  const openRouterRes = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${key}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: 'openai/gpt-4o-mini',
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: userPrompt },
+            { type: 'image_url', image_url: { url: dataUrl } },
+          ],
+        },
+      ],
+      max_tokens: 1200,
+    }),
+  });
+
+  const json = await openRouterRes.json().catch(() => ({}));
+  if (!openRouterRes.ok) {
+    const msg = json?.error?.message || `OpenRouter error (${openRouterRes.status})`;
+    throw new Error(msg);
+  }
+
+  const msgContent = json?.choices?.[0]?.message?.content;
+  const content =
+    typeof msgContent === 'string'
+      ? msgContent.trim()
+      : Array.isArray(msgContent)
+        ? msgContent
+            .map((part) => (typeof part?.text === 'string' ? part.text : ''))
+            .join('')
+            .trim()
+        : '';
+
+  if (!content) {
+    throw new Error('No text in model response');
+  }
+  return content;
+}
+
+async function analyzeWithGemini({ key, userPrompt, mime, imageBase64 }) {
+  const geminiRes = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${encodeURIComponent(
+      key
+    )}`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        contents: [
+          {
+            parts: [
+              { text: userPrompt },
+              {
+                inline_data: {
+                  mime_type: mime,
+                  data: imageBase64,
+                },
+              },
+            ],
+          },
+        ],
+        generationConfig: {
+          maxOutputTokens: 1200,
+        },
+      }),
+    }
+  );
+
+  const json = await geminiRes.json().catch(() => ({}));
+  if (!geminiRes.ok) {
+    const msg = json?.error?.message || `Gemini error (${geminiRes.status})`;
+    throw new Error(msg);
+  }
+
+  const parts = json?.candidates?.[0]?.content?.parts;
+  const content = Array.isArray(parts)
+    ? parts
+        .map((p) => (typeof p?.text === 'string' ? p.text : ''))
+        .join('')
+        .trim()
+    : '';
+  if (!content) {
+    throw new Error('No text in model response');
+  }
+  return content;
+}
+
 export default async function handler(req, res) {
   setCors(res);
   if (req.method === 'OPTIONS') {
@@ -26,9 +121,10 @@ export default async function handler(req, res) {
     return;
   }
 
+  const openRouterKey = process.env.OPENROUTER_API_KEY;
   const geminiKey = process.env.GEMINI_API_KEY;
-  if (!geminiKey) {
-    res.status(500).json({ error: 'Server missing GEMINI_API_KEY' });
+  if (!openRouterKey && !geminiKey) {
+    res.status(500).json({ error: 'Server missing OPENROUTER_API_KEY and GEMINI_API_KEY' });
     return;
   }
   if (!isAuthorized(req)) {
@@ -42,61 +138,34 @@ export default async function handler(req, res) {
     return;
   }
 
-  const mime =
-    typeof mimeType === 'string' && mimeType.startsWith('image/')
-      ? mimeType
-      : 'image/jpeg';
+  const mime = typeof mimeType === 'string' && mimeType.startsWith('image/') ? mimeType : 'image/jpeg';
   const userPrompt =
     typeof prompt === 'string' && prompt.trim() ? prompt.trim() : DEFAULT_PROMPT;
+  const dataUrl = `data:${mime};base64,${imageBase64}`;
 
   try {
-    const geminiRes = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${encodeURIComponent(
-        geminiKey
-      )}`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          contents: [
-            {
-              parts: [
-                { text: userPrompt },
-                {
-                  inline_data: {
-                    mime_type: mime,
-                    data: imageBase64,
-                  },
-                },
-              ],
-            },
-          ],
-          generationConfig: {
-            maxOutputTokens: 1200,
-          },
-        }),
-      }
-    );
+    let content = '';
+    let openRouterError = '';
 
-    const json = await geminiRes.json().catch(() => ({}));
-    if (!geminiRes.ok) {
-      const msg = json?.error?.message || `Gemini error (${geminiRes.status})`;
-      res.status(502).json({ error: msg });
-      return;
+    if (openRouterKey) {
+      try {
+        content = await analyzeWithOpenRouter({ key: openRouterKey, userPrompt, dataUrl });
+      } catch (e) {
+        openRouterError = e instanceof Error ? e.message : String(e);
+      }
     }
 
-    const parts = json?.candidates?.[0]?.content?.parts;
-    const content = Array.isArray(parts)
-      ? parts
-          .map((p) => (typeof p?.text === 'string' ? p.text : ''))
-          .join('')
-          .trim()
-      : '';
+    if (!content && geminiKey) {
+      content = await analyzeWithGemini({
+        key: geminiKey,
+        userPrompt,
+        mime,
+        imageBase64,
+      });
+    }
 
-    if (!content) {
-      res.status(502).json({ error: 'No text in model response' });
+    if (!content && openRouterError) {
+      res.status(502).json({ error: `OpenRouter failed and no Gemini fallback succeeded: ${openRouterError}` });
       return;
     }
 

@@ -210,9 +210,9 @@ export default function App() {
         contentContainerStyle={styles.scroll}
         keyboardShouldPersistTaps="handled"
       >
-        <Text style={styles.title}>Picture → Gemini → SMS</Text>
+        <Text style={styles.title}>Picture → OpenRouter → SMS</Text>
         <Text style={styles.sub}>
-          Photo is analyzed on your server (Gemini key stays there). Result is sent by SMS.
+          Photo is analyzed on your server (OpenRouter key stays there). Result is sent by SMS.
         </Text>
 
         <Text style={styles.label}>Backend API URL</Text>
@@ -272,7 +272,7 @@ export default function App() {
         {status ? <Text style={styles.status}>{status}</Text> : null}
 
         <Text style={styles.note}>
-          Deploy the server in the server folder, set GEMINI_API_KEY (and optional CLIENT_BEARER_TOKEN),
+          Deploy the server in the server folder, set OPENROUTER_API_KEY (and optional CLIENT_BEARER_TOKEN),
           then paste the public URL here. Settings are stored on this device only. Use a real phone for
           camera and SMS.
         </Text>

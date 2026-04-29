@@ -7,7 +7,8 @@ PICTURE TO SMS — BACKEND + APK
    - Framework preset: Other (no special framework required).
    - Root directory: project root (PictureToSMS), not server.
    - Add environment variables in Vercel project settings:
-       GEMINI_API_KEY = your Gemini API key
+       OPENROUTER_API_KEY = your OpenRouter API key (primary)
+       GEMINI_API_KEY = your Gemini API key (optional fallback)
        CLIENT_BEARER_TOKEN = any long random secret (recommended)
    - Deploy, then copy the public HTTPS URL (e.g. https://pictogpt.vercel.app).
    - The app endpoint is already mapped:
@@ -19,7 +20,8 @@ PICTURE TO SMS — BACKEND + APK
    - Set the service root folder to: server
    - Build uses server/Dockerfile automatically when Dockerfile is present.
    - Variables (service -> Variables):
-       GEMINI_API_KEY = your Gemini API key
+       OPENROUTER_API_KEY = your OpenRouter API key (primary)
+       GEMINI_API_KEY = your Gemini API key (optional fallback)
        CLIENT_BEARER_TOKEN = any long random secret (recommended)
    - Deploy, then copy the public HTTPS URL (e.g. https://something.up.railway.app).
 
