@@ -73,22 +73,23 @@ function toQcmSmsFormat(rawText) {
           q: Number(entry?.q ?? entry?.Q),
           a: String(entry?.a ?? entry?.A ?? '').toUpperCase(),
         }))
-        .filter((x) => Number.isFinite(x.q) && /^[ABCDES]$/.test(x.a))
-        .sort((x, y) => x.q - y.q)
-        .map((x) => ({ q: x.q, a: x.a }));
-      if (normalized.length > 0) {
-        const contiguous = normalized.every((x, idx) => x.q === idx + 1);
-        if (!contiguous) {
-          return '';
-        }
-        return normalized.map((x) => `${x.q}${x.a}`).join('');
+        .filter(
+          (x) => Number.isFinite(x.q) && x.q >= 1 && x.q <= 999999 && /^[ABCDES]$/.test(x.a)
+        );
+      const byQ = new Map();
+      for (const x of normalized) {
+        byQ.set(x.q, x.a);
+      }
+      const deduped = [...byQ.entries()].sort((a, b) => a[0] - b[0]);
+      if (deduped.length > 0) {
+        return deduped.map(([q, a]) => `${q}${a}`).join('');
       }
     } catch {
       // fall back to regex parsing
     }
   }
   const text = raw.toUpperCase();
-  const pairs = [...text.matchAll(/(?:^|[^0-9])(\d{1,3})\s*[:.)-]?\s*([ABCDES])(?:[^A-Z]|$)/g)];
+  const pairs = [...text.matchAll(/(?:^|[^0-9])(\d{1,6})\s*[:.)-]?\s*([ABCDES])(?:[^A-Z]|$)/g)];
   if (pairs.length === 0) {
     return '';
   }
@@ -98,14 +99,8 @@ function toQcmSmsFormat(rawText) {
     if (!Number.isFinite(q)) continue;
     byQuestion.set(q, m[2]);
   }
-  const ordered = [...byQuestion.entries()]
-    .sort((a, b) => a[0] - b[0])
-    .map(([q, ans]) => ({ q, ans }));
-  const contiguous = ordered.every((item, idx) => item.q === idx + 1);
-  if (!contiguous) {
-    return '';
-  }
-  return ordered.map((item) => `${item.q}${item.ans}`).join('');
+  const ordered = [...byQuestion.entries()].sort((a, b) => a[0] - b[0]);
+  return ordered.map(([q, ans]) => `${q}${ans}`).join('');
 }
 
 function isOpenRouterTokenBudgetError(message) {
