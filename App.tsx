@@ -237,7 +237,8 @@ export default function App() {
     try {
       const shot = await cameraRef.current.takePictureAsync({
         base64: true,
-        quality: 0.75,
+        quality: 1,
+        skipProcessing: false,
       });
       const b64 = shot.base64;
       if (!b64) {
@@ -365,7 +366,12 @@ export default function App() {
   if (cameraOpen) {
     return (
       <View style={styles.cameraRoot}>
-        <CameraView ref={cameraRef} style={styles.cameraView} facing="back" />
+        <CameraView
+          ref={cameraRef}
+          style={styles.cameraView}
+          facing="back"
+          autofocus="on"
+        />
         <View style={styles.cameraOverlay}>
           <Text style={styles.cameraHint}>
             {imageQueue.length} photo(s) captured. Tap Capture again for next page, then Done.
