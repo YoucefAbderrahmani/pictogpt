@@ -1,5 +1,6 @@
 import cors from 'cors';
 import express from 'express';
+import sharp from 'sharp';
 
 const app = express();
 const PORT = Number(process.env.PORT) || 8787;
@@ -90,6 +91,25 @@ function toQcmSmsFormat(rawText) {
 
 const DEFAULT_PROMPT =
   'Describe what you see in this image clearly and concisely. The reply will be sent by SMS, so be direct and avoid markdown.';
+
+function ocrEnhanceEnabled() {
+  const raw = (process.env.OCR_IMAGE_ENHANCE || 'true').toLowerCase().trim();
+  return !['0', 'false', 'off', 'no'].includes(raw);
+}
+
+async function enhanceImageForOcr(imageBase64) {
+  const input = Buffer.from(imageBase64, 'base64');
+  const output = await sharp(input)
+    .grayscale()
+    .normalize()
+    .sharpen({ sigma: 1.2 })
+    .png({ compressionLevel: 9 })
+    .toBuffer();
+  return {
+    mime: 'image/png',
+    imageBase64: output.toString('base64'),
+  };
+}
 
 /** Low default avoids OpenRouter “cannot afford max_tokens” on small balances; raise via env if you have credits. */
 function envIntInRange(name, defaultVal, min, max) {
@@ -282,7 +302,18 @@ app.post('/v1/analyze', async (req, res) => {
   }
   const mime = typeof mimeType === 'string' && mimeType.startsWith('image/') ? mimeType : 'image/jpeg';
   const userPrompt = typeof prompt === 'string' && prompt.trim() ? prompt.trim() : DEFAULT_PROMPT;
-  const dataUrl = `data:${mime};base64,${imageBase64}`;
+  let processedMime = mime;
+  let processedBase64 = imageBase64;
+  if (ocrEnhanceEnabled()) {
+    try {
+      const enhanced = await enhanceImageForOcr(imageBase64);
+      processedMime = enhanced.mime;
+      processedBase64 = enhanced.imageBase64;
+    } catch {
+      // keep original image if enhancement fails
+    }
+  }
+  const dataUrl = `data:${processedMime};base64,${processedBase64}`;
   try {
     let content = '';
     const attemptErrors = [];
@@ -304,8 +335,8 @@ app.post('/v1/analyze', async (req, res) => {
           content = await analyzeWithGemini({
             key: geminiKeys[i],
             userPrompt,
-            mime,
-            imageBase64,
+            mime: processedMime,
+            imageBase64: processedBase64,
           });
           if (content) break;
           attemptErrors.push(`Gemini key #${i + 1}: empty response`);
