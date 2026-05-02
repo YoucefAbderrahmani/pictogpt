@@ -15,17 +15,37 @@ function isAuthorized(req) {
   return token === expected;
 }
 
+/** Primary env + optional `NAME_2`, `NAME_3`, `NAME_4`. Tried in order. */
+function collectApiKeyChain(envBaseName) {
+  const keys = [];
+  const main = process.env[envBaseName];
+  if (typeof main === 'string' && main.trim()) keys.push(main.trim());
+  for (let i = 2; i <= 4; i += 1) {
+    const v = process.env[`${envBaseName}_${i}`];
+    if (typeof v === 'string' && v.trim()) keys.push(v.trim());
+  }
+  return keys;
+}
+
+function qcmAnswersFromParsed(parsed) {
+  const raw =
+    parsed?.answers ??
+    parsed?.ANSWERS ??
+    (Array.isArray(parsed) ? parsed : null);
+  return Array.isArray(raw) ? raw : [];
+}
+
 function toQcmSmsFormat(rawText) {
-  const text = String(rawText || '').toUpperCase();
-  const jsonMatch = text.match(/\{[\s\S]*\}/);
+  const raw = String(rawText || '');
+  const jsonMatch = raw.match(/\{[\s\S]*\}/);
   if (jsonMatch) {
     try {
       const parsed = JSON.parse(jsonMatch[0]);
-      const answers = Array.isArray(parsed?.answers) ? parsed.answers : [];
+      const answers = qcmAnswersFromParsed(parsed);
       const normalized = answers
-        .map((a) => ({
-          q: Number(a?.q),
-          a: String(a?.a || '').toUpperCase(),
+        .map((entry) => ({
+          q: Number(entry?.q ?? entry?.Q),
+          a: String(entry?.a ?? entry?.A ?? '').toUpperCase(),
         }))
         .filter((x) => Number.isFinite(x.q) && /^[ABCDE]$/.test(x.a))
         .sort((x, y) => x.q - y.q)
@@ -41,6 +61,7 @@ function toQcmSmsFormat(rawText) {
       // fall back to regex parsing
     }
   }
+  const text = raw.toUpperCase();
   const pairs = [...text.matchAll(/(?:^|[^0-9])(\d{1,3})\s*[:.)-]?\s*([ABCDE])(?:[^A-Z]|$)/g)];
   if (pairs.length === 0) {
     return '';
@@ -79,7 +100,7 @@ async function analyzeWithOpenRouter({ key, userPrompt, dataUrl }) {
           ],
         },
       ],
-      max_tokens: 1200,
+      max_tokens: 4096,
     }),
   });
 
@@ -131,7 +152,7 @@ async function analyzeWithGemini({ key, userPrompt, mime, imageBase64 }) {
           },
         ],
         generationConfig: {
-          maxOutputTokens: 1200,
+          maxOutputTokens: 4096,
         },
       }),
     }
@@ -167,10 +188,13 @@ export default async function handler(req, res) {
     return;
   }
 
-  const openRouterKey = process.env.OPENROUTER_API_KEY;
-  const geminiKey = process.env.GEMINI_API_KEY;
-  if (!openRouterKey && !geminiKey) {
-    res.status(500).json({ error: 'Server missing OPENROUTER_API_KEY and GEMINI_API_KEY' });
+  const openRouterKeys = collectApiKeyChain('OPENROUTER_API_KEY');
+  const geminiKeys = collectApiKeyChain('GEMINI_API_KEY');
+  if (openRouterKeys.length === 0 && geminiKeys.length === 0) {
+    res.status(500).json({
+      error:
+        'Server missing API keys: set OPENROUTER_API_KEY and/or GEMINI_API_KEY (optional _2, _3, _4 for extra fallbacks per provider)',
+    });
     return;
   }
   if (!isAuthorized(req)) {
@@ -195,27 +219,41 @@ export default async function handler(req, res) {
 
   try {
     let content = '';
-    let openRouterError = '';
+    const attemptErrors = [];
 
-    if (openRouterKey) {
+    for (let i = 0; i < openRouterKeys.length; i += 1) {
       try {
-        content = await analyzeWithOpenRouter({ key: openRouterKey, userPrompt, dataUrl });
+        content = await analyzeWithOpenRouter({ key: openRouterKeys[i], userPrompt, dataUrl });
+        if (content) break;
+        attemptErrors.push(`OpenRouter key #${i + 1}: empty response`);
       } catch (e) {
-        openRouterError = e instanceof Error ? e.message : String(e);
+        const msg = e instanceof Error ? e.message : String(e);
+        attemptErrors.push(`OpenRouter key #${i + 1}: ${msg}`);
       }
     }
 
-    if (!content && geminiKey) {
-      content = await analyzeWithGemini({
-        key: geminiKey,
-        userPrompt,
-        mime,
-        imageBase64,
-      });
+    if (!content) {
+      for (let i = 0; i < geminiKeys.length; i += 1) {
+        try {
+          content = await analyzeWithGemini({
+            key: geminiKeys[i],
+            userPrompt,
+            mime,
+            imageBase64,
+          });
+          if (content) break;
+          attemptErrors.push(`Gemini key #${i + 1}: empty response`);
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          attemptErrors.push(`Gemini key #${i + 1}: ${msg}`);
+        }
+      }
     }
 
-    if (!content && openRouterError) {
-      res.status(502).json({ error: `OpenRouter failed and no Gemini fallback succeeded: ${openRouterError}` });
+    if (!content) {
+      res.status(502).json({
+        error: `All API keys failed (${attemptErrors.length} attempt(s)): ${attemptErrors.join(' | ')}`,
+      });
       return;
     }
 

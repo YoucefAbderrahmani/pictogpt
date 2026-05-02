@@ -22,8 +22,29 @@ const KEY_PHONE = 'picture_to_sms_phone';
 
 const DEFAULT_PROMPT =
   'Describe what you see in this image clearly and concisely. The reply will be sent by SMS, so be direct and avoid markdown.';
-const QCM_PROMPT =
-  'You are solving a multiple-choice questionnaire (QCM) from the provided image. Identify every visible question in order and select exactly one answer from A, B, C, D, or E for each question. Return ONLY valid JSON in this exact schema: {"total_questions":<number>,"answers":[{"q":1,"a":"A"},{"q":2,"a":"B"}]}. Rules: q must be continuous starting at 1, sorted ascending, one entry per question, and a must be only A/B/C/D/E. If only one question exists, return one entry only (for example {"total_questions":1,"answers":[{"q":1,"a":"E"}]}). No markdown and no extra text.';
+const QCM_PROMPT = `You are reading a multiple-choice exam (QCM) from the attached image. Your job is to OCR and reason accurately.
+
+How to read the image:
+- Read top-to-bottom, left-to-right. Follow the numbering printed on the sheet (1, 2, 3…). If numbers are missing, number questions in visible order starting at 1.
+- Transcribe each question stem exactly as printed (fix obvious OCR typos only if meaning is clear).
+- For each question, identify every answer choice. If the sheet uses numbers (1)(2)(3)(4), bullets, or symbols instead of letters, map them in order to labels A, B, C, D (and E only if a fifth option is clearly present). Always output choices with letter labels A, B, C, D in that order for the first four options.
+- Copy each choice’s text faithfully under the correct letter.
+
+How to choose "a":
+- Pick exactly one letter per question: the best answer or the one you would mark on the form. Use only A, B, C, D, or E (E only when a fifth option exists).
+
+Compact answer key (required meaning of your choices):
+- Number questions 1, 2, 3, 4, … in order. For each question, options are A, B, C, D (and E if applicable).
+- The full solution must be expressible as one continuous string: each question contributes its number immediately followed by its chosen letter, with no spaces or separators between questions.
+- Example: 1B2D3A means question 1 → answer B, question 2 → answer D, question 3 → answer A. Another example: 1A2A3C4B for four questions.
+- Your JSON must match this encoding: if you list "answers" sorted by "q" ascending (1, then 2, then 3, …), then concatenating each pair q+a (as digits + single letter) must produce exactly that compact string.
+
+Output rules:
+- Return a single JSON object only. No markdown, no code fences, no commentary before or after.
+- Use this schema (all keys lowercase):
+{"total_questions":<number>,"answers":[{"q":1,"question":"<stem text>","choices":[{"label":"A","text":"<option A>"},{"label":"B","text":"<option B>"},{"label":"C","text":"<option C>"},{"label":"D","text":"<option D>"}],"a":"A"}, ...]}
+- Include a "choices" array for every question; each item must have "label" (A–D or A–E) and "text" (the option wording). Labels must be uppercase letters.
+- "total_questions" must equal the length of "answers". "q" must run 1,2,3… with no gaps. "a" must be one of A/B/C/D/E matching an existing label for that question.`;
 
 function getBackendCandidates(raw: string): string[] {
   const base = raw.trim().replace(/\/+$/, '');
@@ -326,7 +347,9 @@ export default function App() {
         {status ? <Text style={styles.status}>{status}</Text> : null}
 
         <Text style={styles.note}>
-          Deploy the backend and set OPENROUTER_API_KEY (optional GEMINI_API_KEY fallback). On Android,
+          Deploy the backend with OPENROUTER_API_KEY plus optional OPENROUTER_API_KEY_2, OPENROUTER_API_KEY_3,
+          OPENROUTER_API_KEY_4, then GEMINI_API_KEY with optional GEMINI_API_KEY_2, GEMINI_API_KEY_3,
+          GEMINI_API_KEY_4 (tried in order). On Android,
           this app sends SMS directly after image analysis using SEND_SMS permission.
         </Text>
       </ScrollView>
