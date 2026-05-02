@@ -82,7 +82,7 @@ function toQcmSmsFormat(rawText) {
       }
       const deduped = [...byQ.entries()].sort((a, b) => a[0] - b[0]);
       if (deduped.length > 0) {
-        return deduped.map(([q, a]) => `${q}${a}`).join('');
+        return deduped.map(([q, a]) => `${q}${a}`).join('-');
       }
     } catch {
       // fall back to regex parsing
@@ -100,7 +100,7 @@ function toQcmSmsFormat(rawText) {
     byQuestion.set(q, m[2]);
   }
   const ordered = [...byQuestion.entries()].sort((a, b) => a[0] - b[0]);
-  return ordered.map(([q, ans]) => `${q}${ans}`).join('');
+  return ordered.map(([q, ans]) => `${q}${ans}`).join('-');
 }
 
 function isOpenRouterTokenBudgetError(message) {
@@ -114,7 +114,7 @@ function openRouterMessageContent(json) {
   if (Array.isArray(msgContent)) {
     return msgContent
       .map((part) => (typeof part?.text === 'string' ? part.text : ''))
-      .join('')
+      .join('-')
       .trim();
   }
   return '';
@@ -228,7 +228,7 @@ async function analyzeWithGemini({ key, userPrompt, mime, imageBase64 }) {
       const content = Array.isArray(parts)
         ? parts
             .map((p) => (typeof p?.text === 'string' ? p.text : ''))
-            .join('')
+            .join('-')
             .trim()
         : '';
       if (content) {

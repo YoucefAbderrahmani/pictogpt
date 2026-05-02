@@ -26,7 +26,7 @@ const QCM_PROMPT = `You are reading a multiple-choice exam (QCM) from the attach
 
 How to read the image:
 - Read top-to-bottom, left-to-right.
-- **Question numbers (critical):** Use the **number printed on the exam next to each question** as JSON field **q** and in the compact SMS string. Example: if the sheet shows questions **37**, **38**, **39**, then use **q** values 37, 38, 39 and compact like **37A38B39S**—do **not** renumber them as 1, 2, 3. Only if a question has **no visible printed number**, assign **q** in order starting at 1 for those items only.
+- **Question numbers (critical):** Use the **number printed on the exam next to each question** as JSON field **q** and in the compact SMS string. Example: if the sheet shows questions **37**, **38**, **39**, then use **q** values 37, 38, 39 and compact like **37A-38B-39S**—do **not** renumber them as 1, 2, 3. Only if a question has **no visible printed number**, assign **q** in order starting at 1 for those items only.
 - **Image quality:** The photo may be blurry, too dark, too bright, glare, motion blur, low resolution, or cropped so text is hard to read. When **the image itself** does not let you read a question or its options reliably for that item, treat it as not clear enough—**do not guess A–E**; use **S** (skip) for that question number.
 - Transcribe each question stem exactly as printed (fix obvious OCR typos only if meaning is clear).
 - For each question, identify every answer choice. If the sheet uses numbers (1)(2)(3)(4), bullets, or symbols instead of letters, map them in order to labels A, B, C, D (and E only if a fifth option is clearly present). Always output choices with letter labels A, B, C, D in that order for the first four options.
@@ -37,9 +37,9 @@ How to choose the answer field a:
 - If you **cannot read** the stem or choices well enough because of **bad image quality** (blur, lighting, resolution, crop, glare, etc.), or the wording is **ambiguous or cut off**, **do not guess**. Use **S** (skipped) for that question: in JSON set field **a** to **S** (skip). In the compact SMS string that is **printedQuestionNumber + S** (e.g. sheet question **37** unclear → **37S**). Never output a random A–E when you are not confident.
 
 Compact answer key (required meaning of your choices):
-- For each question, options are A, B, C, D (and E if applicable), or **S** when skipped. Sort by **printed q** ascending, then concatenate each pair **questionNumber + letter** with no spaces (e.g. **37A38B39S**).
-- Example with printed numbers: **37A38B39S** means sheet Q37→A, Q38→B, Q39 skipped. Example when sheet uses 1,2,3: **1B2D3A** means Q1→B, Q2→D, Q3→A.
-- Your JSON must match this encoding: sort "answers" by **q** ascending, then concatenating each **q + a** produces the compact string (multi-digit **q** is allowed).
+- For each question, options are A, B, C, D (and E if applicable), or **S** when skipped. Sort by **printed q** ascending, then join each pair **questionNumber + letter** with '-' and no spaces (e.g. **37A-38B-39S**).
+- Example with printed numbers: **37A-38B-39S** means sheet Q37→A, Q38→B, Q39 skipped. Example when sheet uses 1,2,3: **1B-2D-3A** means Q1→B, Q2→D, Q3→A.
+- Your JSON must match this encoding: sort "answers" by **q** ascending, then joining each **q + a** pair with '-' produces the compact string (multi-digit **q** is allowed).
 
 Output rules:
 - Return a single JSON object only. No markdown, no code fences, no commentary before or after.
