@@ -370,11 +370,11 @@ export default function App() {
           <Text style={styles.cameraHint}>
             {imageQueue.length} photo(s) captured. Tap Capture again for next page, then Done.
           </Text>
-          <View style={styles.row}>
+          <View style={styles.cameraRow}>
             <Pressable style={styles.secondaryBtn} onPress={closeCamera}>
               <Text style={styles.secondaryBtnText}>Done</Text>
             </Pressable>
-            <Pressable style={[styles.button, styles.secondaryBtnRight]} onPress={captureInCamera}>
+            <Pressable style={[styles.cameraCaptureBtn, styles.secondaryBtnRight]} onPress={captureInCamera}>
               <Text style={styles.buttonText}>Capture</Text>
             </Pressable>
           </View>
@@ -551,6 +551,18 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 20,
     marginBottom: 10,
+  },
+  cameraRow: {
+    flexDirection: 'row',
+    marginTop: 6,
+  },
+  cameraCaptureBtn: {
+    flex: 1,
+    backgroundColor: '#2563eb',
+    paddingVertical: 16,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   root: {
     flex: 1,

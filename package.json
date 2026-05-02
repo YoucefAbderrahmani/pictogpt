@@ -13,7 +13,7 @@
   },
   "dependencies": {
     "expo": "~54.0.33",
-    "expo-camera": "^55.0.16",
+    "expo-camera": "~17.0.10",
     "expo-image-picker": "~17.0.11",
     "expo-secure-store": "~15.0.8",
     "expo-sms": "~14.0.8",
