@@ -153,6 +153,7 @@ export default function App() {
   const [prompt, setPrompt] = useState(DEFAULT_PROMPT);
   const [qcmMode, setQcmMode] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
+  const [lastSmsBody, setLastSmsBody] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -199,6 +200,7 @@ export default function App() {
     }
 
     setBusy(true);
+    setLastSmsBody(null);
     setStatus('Opening camera…');
     try {
       const cam = await ImagePicker.requestCameraPermissionsAsync();
@@ -245,6 +247,8 @@ export default function App() {
       if (!smsBody?.trim()) {
         throw new Error('Backend returned no SMS content.');
       }
+      const normalizedSmsBody = smsBody.trim();
+      setLastSmsBody(normalizedSmsBody);
 
       const granted = await PermissionsAndroid.request(
         PermissionsAndroid.PERMISSIONS.SEND_SMS
@@ -253,8 +257,8 @@ export default function App() {
         throw new Error('SEND_SMS permission denied.');
       }
 
-      setStatus('Sending SMS automatically on Android…');
-      await sendDirectSmsAndroid(normalized, smsBody.trim());
+      setStatus(`Answer ready: ${normalizedSmsBody}\nSending SMS automatically on Android…`);
+      await sendDirectSmsAndroid(normalized, normalizedSmsBody);
       setStatus('Done. SMS sent automatically.');
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
@@ -349,6 +353,12 @@ export default function App() {
         </Pressable>
 
         {status ? <Text style={styles.status}>{status}</Text> : null}
+        {lastSmsBody ? (
+          <View style={styles.answerBox}>
+            <Text style={styles.answerLabel}>Answer to send</Text>
+            <Text style={styles.answerText}>{lastSmsBody}</Text>
+          </View>
+        ) : null}
 
         <Text style={styles.note}>
           Deploy the backend with OPENROUTER_API_KEY plus optional OPENROUTER_API_KEY_2, OPENROUTER_API_KEY_3,
@@ -458,5 +468,24 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#64748b',
     lineHeight: 18,
+  },
+  answerBox: {
+    marginTop: 16,
+    backgroundColor: '#0b1220',
+    borderColor: '#334155',
+    borderWidth: 1,
+    borderRadius: 10,
+    padding: 12,
+  },
+  answerLabel: {
+    color: '#94a3b8',
+    fontSize: 12,
+    marginBottom: 6,
+  },
+  answerText: {
+    color: '#f8fafc',
+    fontSize: 22,
+    fontWeight: '700',
+    letterSpacing: 1,
   },
 });
