@@ -32,19 +32,20 @@ How to read the image:
 
 How to choose "a":
 - Pick exactly one letter per question: the best answer or the one you would mark on the form. Use only A, B, C, D, or E (E only when a fifth option exists).
+- If the question stem, the image crop, or one or more answer choices are **unclear, unreadable, cut off, or ambiguous** so you cannot justify a single best letter, **do not guess**. Use **S** (skipped) for that question: in JSON set `"a":"S"`. In the compact SMS string that is **qS** (e.g. **4S** = question 4 skipped). Never output a random A–E when you are not confident.
 
 Compact answer key (required meaning of your choices):
-- Number questions 1, 2, 3, 4, … in order. For each question, options are A, B, C, D (and E if applicable).
+- Number questions 1, 2, 3, 4, … in order. For each question, options are A, B, C, D (and E if applicable), or **S** when skipped.
 - The full solution must be expressible as one continuous string: each question contributes its number immediately followed by its chosen letter, with no spaces or separators between questions.
-- Example: 1B2D3A means question 1 → answer B, question 2 → answer D, question 3 → answer A. Another example: 1A2A3C4B for four questions.
+- Example: 1B2D3A means question 1 → answer B, question 2 → answer D, question 3 → answer A. Example with skips (always sort by q): **1A2B3S4A** means Q1→A, Q2→B, Q3 skipped, Q4→A. For four visible questions you must still emit four pairs, e.g. **1A2B3C4S** means only question 4 is skipped (**4S**).
 - Your JSON must match this encoding: if you list "answers" sorted by "q" ascending (1, then 2, then 3, …), then concatenating each pair q+a (as digits + single letter) must produce exactly that compact string.
 
 Output rules:
 - Return a single JSON object only. No markdown, no code fences, no commentary before or after.
 - Use this schema (all keys lowercase):
 {"total_questions":<number>,"answers":[{"q":1,"question":"<stem text>","choices":[{"label":"A","text":"<option A>"},{"label":"B","text":"<option B>"},{"label":"C","text":"<option C>"},{"label":"D","text":"<option D>"}],"a":"A"}, ...]}
-- Include a "choices" array for every question; each item must have "label" (A–D or A–E) and "text" (the option wording). Labels must be uppercase letters.
-- "total_questions" must equal the length of "answers". "q" must run 1,2,3… with no gaps. "a" must be one of A/B/C/D/E matching an existing label for that question.`;
+- Include a "choices" array for every question when options are legible; each item must have "label" (A–D or A–E) and "text" (the option wording). If the question is skipped ("a":"S"), "choices" may be an empty array [] or best-effort partial text—do not invent fake options.
+- "total_questions" must equal the length of "answers". "q" must run 1,2,3… with no gaps. "a" must be one of A/B/C/D/E (matching an existing label when not skipped) or **S** when skipped.`;
 
 function getBackendCandidates(raw: string): string[] {
   const base = raw.trim().replace(/\/+$/, '');

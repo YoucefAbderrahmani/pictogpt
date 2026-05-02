@@ -73,7 +73,7 @@ function toQcmSmsFormat(rawText) {
           q: Number(entry?.q ?? entry?.Q),
           a: String(entry?.a ?? entry?.A ?? '').toUpperCase(),
         }))
-        .filter((x) => Number.isFinite(x.q) && /^[ABCDE]$/.test(x.a))
+        .filter((x) => Number.isFinite(x.q) && /^[ABCDES]$/.test(x.a))
         .sort((x, y) => x.q - y.q)
         .map((x) => ({ q: x.q, a: x.a }));
       if (normalized.length > 0) {
@@ -88,7 +88,7 @@ function toQcmSmsFormat(rawText) {
     }
   }
   const text = raw.toUpperCase();
-  const pairs = [...text.matchAll(/(?:^|[^0-9])(\d{1,3})\s*[:.)-]?\s*([ABCDE])(?:[^A-Z]|$)/g)];
+  const pairs = [...text.matchAll(/(?:^|[^0-9])(\d{1,3})\s*[:.)-]?\s*([ABCDES])(?:[^A-Z]|$)/g)];
   if (pairs.length === 0) {
     return '';
   }
