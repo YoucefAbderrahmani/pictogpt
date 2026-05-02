@@ -287,6 +287,7 @@ export default function App() {
 
     const effectivePrompt = qcmMode ? QCM_PROMPT : prompt;
     const sentBodies: string[] = [];
+    const skipped: string[] = [];
 
     try {
       const granted = await PermissionsAndroid.request(
@@ -296,40 +297,52 @@ export default function App() {
         throw new Error('SEND_SMS permission denied.');
       }
 
+      let captureNumber = 1;
       while (pending.length > 0) {
         const [current, ...rest] = pending;
-        const idx = sentBodies.length + 1;
-        setStatus(`Analyzing photo ${idx} of ${totalPlanned}…`);
+        try {
+          setStatus(`Analyzing photo ${captureNumber} of ${totalPlanned}…`);
+          const backendResult = await callBackendAnalyze(
+            backendUrl,
+            bearerToken || null,
+            normalized,
+            current.base64,
+            current.mimeType,
+            effectivePrompt,
+            qcmMode
+          );
 
-        const backendResult = await callBackendAnalyze(
-          backendUrl,
-          bearerToken || null,
-          normalized,
-          current.base64,
-          current.mimeType,
-          effectivePrompt,
-          qcmMode
-        );
+          const smsBody = (backendResult.smsBody || backendResult.text)?.trim();
+          if (!smsBody) {
+            throw new Error('No parseable QCM/SMS content returned');
+          }
 
-        const smsBody = (backendResult.smsBody || backendResult.text)?.trim();
-        if (!smsBody) {
-          throw new Error(`Backend returned no SMS content for photo ${idx}.`);
+          const smsPayload = `${captureNumber})__${smsBody}`;
+          setStatus(`Sending SMS ${captureNumber} of ${totalPlanned}…`);
+          await sendDirectSmsAndroid(normalized, smsPayload);
+          sentBodies.push(smsPayload);
+        } catch (e) {
+          const message = e instanceof Error ? e.message : String(e);
+          skipped.push(`${captureNumber})__ skipped (${message})`);
+        } finally {
+          pending = rest;
+          setImageQueue(pending);
+          captureNumber += 1;
         }
-
-        setStatus(`Sending SMS ${idx} of ${totalPlanned}…`);
-        await sendDirectSmsAndroid(normalized, smsBody);
-        sentBodies.push(smsBody);
-
-        pending = rest;
-        setImageQueue(pending);
       }
 
-      setLastSmsResults(sentBodies);
-      setStatus(`Done. Sent ${sentBodies.length} SMS (one per photo).`);
+      setLastSmsResults([...sentBodies, ...skipped]);
+      if (skipped.length > 0) {
+        setStatus(
+          `Done. Sent ${sentBodies.length}/${totalPlanned} SMS. Skipped ${skipped.length} problematic image(s).`
+        );
+      } else {
+        setStatus(`Done. Sent ${sentBodies.length} SMS (one per photo).`);
+      }
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       setImageQueue(pending);
-      setLastSmsResults(sentBodies);
+      setLastSmsResults([...sentBodies, ...skipped]);
       if (sentBodies.length > 0) {
         setStatus(`Error after ${sentBodies.length} of ${totalPlanned} SMS: ${message}`);
       } else {
