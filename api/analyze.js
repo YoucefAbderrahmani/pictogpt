@@ -8,7 +8,7 @@ function setCors(res) {
 }
 
 function isAuthorized(req) {
-  const expected = process.env.CLIENT_BEARER_TOKEN;
+  const expected = (process.env.CLIENT_BEARER_TOKEN || '').trim();
   if (!expected) return true;
   const h = req.headers.authorization || '';
   const token = h.startsWith('Bearer ') ? h.slice(7).trim() : '';
@@ -198,7 +198,10 @@ export default async function handler(req, res) {
     return;
   }
   if (!isAuthorized(req)) {
-    res.status(401).json({ error: 'Invalid or missing bearer token' });
+    res.status(401).json({
+      error:
+        'Invalid or missing bearer token. In the app, set App secret to the same value as CLIENT_BEARER_TOKEN on the server, or remove/clear CLIENT_BEARER_TOKEN on the server to disable auth.',
+    });
     return;
   }
 

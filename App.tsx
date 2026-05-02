@@ -291,17 +291,21 @@ export default function App() {
           keyboardType="url"
         />
 
-        <Text style={styles.label}>App secret (optional, must match server)</Text>
+        <Text style={styles.label}>App secret</Text>
         <TextInput
           style={styles.input}
           value={bearerToken}
           onChangeText={setBearerToken}
-          placeholder="Same as CLIENT_BEARER_TOKEN on server"
+          placeholder="Leave blank if server has no CLIENT_BEARER_TOKEN"
           placeholderTextColor="#94a3b8"
           autoCapitalize="none"
           autoCorrect={false}
           secureTextEntry
         />
+        <Text style={styles.hint}>
+          If Vercel/Railway has CLIENT_BEARER_TOKEN set, enter the exact same value here (required). If the
+          variable is unset or empty on the server, leave this blank.
+        </Text>
 
         <Text style={styles.label}>SMS recipient (include country code)</Text>
         <TextInput
@@ -386,6 +390,13 @@ const styles = StyleSheet.create({
     color: '#cbd5e1',
     marginBottom: 6,
     marginTop: 12,
+  },
+  hint: {
+    fontSize: 12,
+    color: '#64748b',
+    lineHeight: 18,
+    marginTop: 6,
+    marginBottom: 4,
   },
   input: {
     backgroundColor: '#1e293b',

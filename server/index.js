@@ -7,8 +7,6 @@ const PORT = Number(process.env.PORT) || 8787;
 app.use(cors());
 app.use(express.json({ limit: '20mb' }));
 
-const CLIENT_BEARER = process.env.CLIENT_BEARER_TOKEN;
-
 /** Primary env + optional `NAME_2`, `NAME_3`, `NAME_4` (e.g. OPENROUTER_API_KEY_2). Tried in order. */
 function collectApiKeyChain(envBaseName) {
   const keys = [];
@@ -22,10 +20,11 @@ function collectApiKeyChain(envBaseName) {
 }
 
 function auth(req) {
-  if (!CLIENT_BEARER) return true;
+  const expected = (process.env.CLIENT_BEARER_TOKEN || '').trim();
+  if (!expected) return true;
   const h = req.headers.authorization || '';
   const token = h.startsWith('Bearer ') ? h.slice(7).trim() : '';
-  return token === CLIENT_BEARER;
+  return token === expected;
 }
 
 function qcmAnswersFromParsed(parsed) {
@@ -195,7 +194,10 @@ app.post('/v1/analyze', async (req, res) => {
     return;
   }
   if (!auth(req)) {
-    res.status(401).json({ error: 'Invalid or missing bearer token' });
+    res.status(401).json({
+      error:
+        'Invalid or missing bearer token. In the app, set App secret to the same value as CLIENT_BEARER_TOKEN on the server, or remove/clear CLIENT_BEARER_TOKEN on the server to disable auth.',
+    });
     return;
   }
 
