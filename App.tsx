@@ -16,6 +16,12 @@ import {
 import * as ImagePicker from 'expo-image-picker';
 import * as SecureStore from 'expo-secure-store';
 
+type QueuedImage = {
+  id: string;
+  base64: string;
+  mimeType: string;
+};
+
 const KEY_BACKEND = 'picture_to_sms_backend_url';
 const KEY_BEARER = 'picture_to_sms_bearer';
 const KEY_PHONE = 'picture_to_sms_phone';
@@ -148,6 +154,10 @@ function sendDirectSmsAndroid(to: string, body: string): Promise<void> {
   });
 }
 
+function newImageId(): string {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 export default function App() {
   const [backendUrl, setBackendUrl] = useState('');
   const [bearerToken, setBearerToken] = useState('');
@@ -155,7 +165,8 @@ export default function App() {
   const [prompt, setPrompt] = useState(DEFAULT_PROMPT);
   const [qcmMode, setQcmMode] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
-  const [lastSmsBody, setLastSmsBody] = useState<string | null>(null);
+  const [imageQueue, setImageQueue] = useState<QueuedImage[]>([]);
+  const [lastSmsResults, setLastSmsResults] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -185,24 +196,28 @@ export default function App() {
     }
   }, [backendUrl, bearerToken, phone]);
 
-  const runFlow = useCallback(async () => {
+  const requireAndroidAndSettings = useCallback(() => {
     if (!backendUrl.trim()) {
       Alert.alert('Backend URL', 'Enter your deployed API URL (see server folder).');
-      return;
+      return null;
     }
     const digits = phone.replace(/\D/g, '');
     if (digits.length < 8) {
       Alert.alert('Phone number', 'Enter a valid phone number including country code.');
-      return;
+      return null;
     }
-    const normalized = phone.trim();
     if (Platform.OS !== 'android') {
       Alert.alert('Android only', 'Direct automatic SMS is supported only on Android.');
-      return;
+      return null;
     }
+    return phone.trim();
+  }, [backendUrl, phone]);
+
+  const addPhotoToQueue = useCallback(async () => {
+    const normalized = requireAndroidAndSettings();
+    if (!normalized) return;
 
     setBusy(true);
-    setLastSmsBody(null);
     setStatus('Opening camera…');
     try {
       const cam = await ImagePicker.requestCameraPermissionsAsync();
@@ -220,7 +235,7 @@ export default function App() {
       });
 
       if (picked.canceled || !picked.assets?.[0]) {
-        setStatus('Cancelled.');
+        setStatus('Camera cancelled.');
         return;
       }
 
@@ -231,37 +246,9 @@ export default function App() {
       }
 
       const mime = asset.mimeType || 'image/jpeg';
-      await persistSettings();
-
-      setStatus('Sending image to your backend…');
-      const effectivePrompt = qcmMode ? QCM_PROMPT : prompt;
-      const backendResult = await callBackendAnalyze(
-        backendUrl,
-        bearerToken || null,
-        normalized,
-        b64,
-        mime,
-        effectivePrompt,
-        qcmMode
-      );
-
-      const smsBody = backendResult.smsBody || backendResult.text;
-      if (!smsBody?.trim()) {
-        throw new Error('Backend returned no SMS content.');
-      }
-      const normalizedSmsBody = smsBody.trim();
-      setLastSmsBody(normalizedSmsBody);
-
-      const granted = await PermissionsAndroid.request(
-        PermissionsAndroid.PERMISSIONS.SEND_SMS
-      );
-      if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
-        throw new Error('SEND_SMS permission denied.');
-      }
-
-      setStatus(`Answer ready: ${normalizedSmsBody}\nSending SMS automatically on Android…`);
-      await sendDirectSmsAndroid(normalized, normalizedSmsBody);
-      setStatus('Done. SMS sent automatically.');
+      const item: QueuedImage = { id: newImageId(), base64: b64, mimeType: mime };
+      setImageQueue((q) => [...q, item]);
+      setStatus('Photo added. Add more photos, or press Send all when ready.');
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       setStatus(`Error: ${message}`);
@@ -269,7 +256,92 @@ export default function App() {
     } finally {
       setBusy(false);
     }
-  }, [backendUrl, bearerToken, phone, prompt, qcmMode, persistSettings]);
+  }, [requireAndroidAndSettings]);
+
+  const clearQueue = useCallback(() => {
+    setImageQueue([]);
+    setStatus('Queue cleared.');
+    setLastSmsResults([]);
+  }, []);
+
+  const sendAllFromQueue = useCallback(async () => {
+    const normalized = requireAndroidAndSettings();
+    if (!normalized) return;
+
+    let pending = [...imageQueue];
+    if (pending.length === 0) {
+      Alert.alert('No photos', 'Take one or more photos before pressing Send all.');
+      return;
+    }
+
+    const totalPlanned = pending.length;
+    setBusy(true);
+    setLastSmsResults([]);
+    await persistSettings();
+
+    const effectivePrompt = qcmMode ? QCM_PROMPT : prompt;
+    const sentBodies: string[] = [];
+
+    try {
+      const granted = await PermissionsAndroid.request(
+        PermissionsAndroid.PERMISSIONS.SEND_SMS
+      );
+      if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
+        throw new Error('SEND_SMS permission denied.');
+      }
+
+      while (pending.length > 0) {
+        const [current, ...rest] = pending;
+        const idx = sentBodies.length + 1;
+        setStatus(`Analyzing photo ${idx} of ${totalPlanned}…`);
+
+        const backendResult = await callBackendAnalyze(
+          backendUrl,
+          bearerToken || null,
+          normalized,
+          current.base64,
+          current.mimeType,
+          effectivePrompt,
+          qcmMode
+        );
+
+        const smsBody = (backendResult.smsBody || backendResult.text)?.trim();
+        if (!smsBody) {
+          throw new Error(`Backend returned no SMS content for photo ${idx}.`);
+        }
+
+        setStatus(`Sending SMS ${idx} of ${totalPlanned}…`);
+        await sendDirectSmsAndroid(normalized, smsBody);
+        sentBodies.push(smsBody);
+
+        pending = rest;
+        setImageQueue(pending);
+      }
+
+      setLastSmsResults(sentBodies);
+      setStatus(`Done. Sent ${sentBodies.length} SMS (one per photo).`);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      setImageQueue(pending);
+      setLastSmsResults(sentBodies);
+      if (sentBodies.length > 0) {
+        setStatus(`Error after ${sentBodies.length} of ${totalPlanned} SMS: ${message}`);
+      } else {
+        setStatus(`Error: ${message}`);
+      }
+      Alert.alert('Something went wrong', message);
+    } finally {
+      setBusy(false);
+    }
+  }, [
+    requireAndroidAndSettings,
+    imageQueue,
+    backendUrl,
+    bearerToken,
+    prompt,
+    qcmMode,
+    persistSettings,
+  ]);
 
   return (
     <KeyboardAvoidingView
@@ -282,7 +354,8 @@ export default function App() {
       >
         <Text style={styles.title}>Picture → OpenRouter → SMS</Text>
         <Text style={styles.sub}>
-          Photo is analyzed on your server (OpenRouter key stays there). Result is sent by SMS.
+          Take several photos (each opens the camera), then tap Send all. Your server analyzes each image; you
+          receive one SMS per photo.
         </Text>
 
         <Text style={styles.label}>Backend API URL</Text>
@@ -342,23 +415,66 @@ export default function App() {
           <Text style={styles.qcmButtonText}>QCM {qcmMode ? 'ON' : 'OFF'}</Text>
         </Pressable>
 
+        <Text style={styles.label}>Photo queue</Text>
+        <Text style={styles.queueHint}>
+          {imageQueue.length === 0
+            ? 'No photos yet. Tap Add photo for each sheet or page.'
+            : `${imageQueue.length} photo(s) ready — tap Send all when finished.`}
+        </Text>
+
+        <View style={styles.row}>
+          <Pressable
+            style={({ pressed }) => [
+              styles.secondaryBtn,
+              pressed && styles.buttonPressed,
+              busy && styles.buttonDisabled,
+            ]}
+            onPress={addPhotoToQueue}
+            disabled={busy}
+          >
+            <Text style={styles.secondaryBtnText}>Add photo</Text>
+          </Pressable>
+          <Pressable
+            style={({ pressed }) => [
+              styles.secondaryBtn,
+              styles.secondaryBtnRight,
+              pressed && styles.buttonPressed,
+              (busy || imageQueue.length === 0) && styles.buttonDisabled,
+            ]}
+            onPress={clearQueue}
+            disabled={busy || imageQueue.length === 0}
+          >
+            <Text style={styles.secondaryBtnText}>Clear queue</Text>
+          </Pressable>
+        </View>
+
         <Pressable
-          style={({ pressed }) => [styles.button, pressed && styles.buttonPressed, busy && styles.buttonDisabled]}
-          onPress={runFlow}
-          disabled={busy}
+          style={({ pressed }) => [
+            styles.button,
+            pressed && styles.buttonPressed,
+            (busy || imageQueue.length === 0) && styles.buttonDisabled,
+          ]}
+          onPress={sendAllFromQueue}
+          disabled={busy || imageQueue.length === 0}
         >
           {busy ? (
             <ActivityIndicator color="#fff" />
           ) : (
-            <Text style={styles.buttonText}>Take picture & run</Text>
+            <Text style={styles.buttonText}>
+              Send all{imageQueue.length > 0 ? ` (${imageQueue.length})` : ''}
+            </Text>
           )}
         </Pressable>
 
         {status ? <Text style={styles.status}>{status}</Text> : null}
-        {lastSmsBody ? (
+        {lastSmsResults.length > 0 ? (
           <View style={styles.answerBox}>
-            <Text style={styles.answerLabel}>Answer to send</Text>
-            <Text style={styles.answerText}>{lastSmsBody}</Text>
+            <Text style={styles.answerLabel}>Last batch (one SMS per photo)</Text>
+            {lastSmsResults.map((body, i) => (
+              <Text key={`sms-result-${i}`} style={styles.answerLine}>
+                {i + 1}. {body}
+              </Text>
+            ))}
           </View>
         ) : null}
 
@@ -366,7 +482,7 @@ export default function App() {
           Deploy the backend with OPENROUTER_API_KEY plus optional OPENROUTER_API_KEY_2, OPENROUTER_API_KEY_3,
           OPENROUTER_API_KEY_4, then GEMINI_API_KEY with optional GEMINI_API_KEY_2, GEMINI_API_KEY_3,
           GEMINI_API_KEY_4 (tried in order). On Android,
-          this app sends SMS directly after image analysis using SEND_SMS permission.
+          each photo triggers one analyze request and one SMS.
         </Text>
       </ScrollView>
       <StatusBar style="light" />
@@ -423,6 +539,34 @@ const styles = StyleSheet.create({
   prompt: {
     minHeight: 100,
     textAlignVertical: 'top',
+  },
+  row: {
+    flexDirection: 'row',
+    marginTop: 12,
+  },
+  secondaryBtn: {
+    flex: 1,
+    backgroundColor: '#334155',
+    paddingVertical: 14,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#475569',
+  },
+  secondaryBtnRight: {
+    marginLeft: 10,
+  },
+  secondaryBtnText: {
+    color: '#f1f5f9',
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  queueHint: {
+    fontSize: 13,
+    color: '#94a3b8',
+    lineHeight: 20,
+    marginTop: 4,
   },
   button: {
     marginTop: 28,
@@ -489,5 +633,12 @@ const styles = StyleSheet.create({
     fontSize: 22,
     fontWeight: '700',
     letterSpacing: 1,
+  },
+  answerLine: {
+    color: '#f8fafc',
+    fontSize: 17,
+    fontWeight: '600',
+    marginTop: 8,
+    lineHeight: 24,
   },
 });
