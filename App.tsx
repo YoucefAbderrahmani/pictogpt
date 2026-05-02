@@ -1,5 +1,5 @@
 import { StatusBar } from 'expo-status-bar';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -13,7 +13,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import * as ImagePicker from 'expo-image-picker';
+import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as SecureStore from 'expo-secure-store';
 
 type QueuedImage = {
@@ -167,7 +167,10 @@ export default function App() {
   const [status, setStatus] = useState<string | null>(null);
   const [imageQueue, setImageQueue] = useState<QueuedImage[]>([]);
   const [lastSmsResults, setLastSmsResults] = useState<string[]>([]);
+  const [cameraOpen, setCameraOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [cameraPermission, requestCameraPermission] = useCameraPermissions();
+  const cameraRef = useRef<CameraView | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -213,50 +216,53 @@ export default function App() {
     return phone.trim();
   }, [backendUrl, phone]);
 
-  const addPhotoToQueue = useCallback(async () => {
+  const openMultiCaptureCamera = useCallback(async () => {
     const normalized = requireAndroidAndSettings();
     if (!normalized) return;
 
-    setBusy(true);
-    setStatus('Opening camera…');
+    const granted = cameraPermission?.granted
+      ? true
+      : (await requestCameraPermission()).granted;
+    if (!granted) {
+      Alert.alert('Camera', 'Camera permission is required to take pictures.');
+      return;
+    }
+
+    setStatus('Camera ready. Tap Capture repeatedly, then Done.');
+    setCameraOpen(true);
+  }, [requireAndroidAndSettings, cameraPermission?.granted, requestCameraPermission]);
+
+  const captureInCamera = useCallback(async () => {
+    if (!cameraRef.current) return;
     try {
-      const cam = await ImagePicker.requestCameraPermissionsAsync();
-      if (!cam.granted) {
-        Alert.alert('Camera', 'Camera permission is required to take a picture.');
-        setStatus(null);
-        return;
-      }
-
-      const picked = await ImagePicker.launchCameraAsync({
-        mediaTypes: ['images'],
-        allowsEditing: false,
-        quality: 0.75,
+      const shot = await cameraRef.current.takePictureAsync({
         base64: true,
+        quality: 0.75,
       });
-
-      if (picked.canceled || !picked.assets?.[0]) {
-        setStatus('Camera cancelled.');
-        return;
-      }
-
-      const asset = picked.assets[0];
-      const b64 = asset.base64;
+      const b64 = shot.base64;
       if (!b64) {
-        throw new Error('Could not read image data. Try again or lower quality in code.');
+        throw new Error('Could not read image data. Try again.');
       }
 
-      const mime = asset.mimeType || 'image/jpeg';
+      const mime = 'image/jpeg';
       const item: QueuedImage = { id: newImageId(), base64: b64, mimeType: mime };
       setImageQueue((q) => [...q, item]);
-      setStatus('Photo added. Add more photos, or press Send all when ready.');
+      setStatus('Captured. Keep tapping Capture for next pages, then Done.');
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       setStatus(`Error: ${message}`);
-      Alert.alert('Something went wrong', message);
-    } finally {
-      setBusy(false);
+      Alert.alert('Capture failed', message);
     }
-  }, [requireAndroidAndSettings]);
+  }, []);
+
+  const closeCamera = useCallback(() => {
+    setCameraOpen(false);
+    if (imageQueue.length > 0) {
+      setStatus(`Captured ${imageQueue.length} photo(s). Press Send all.`);
+    } else {
+      setStatus('No photo captured.');
+    }
+  }, [imageQueue.length]);
 
   const clearQueue = useCallback(() => {
     setImageQueue([]);
@@ -343,6 +349,27 @@ export default function App() {
     persistSettings,
   ]);
 
+  if (cameraOpen) {
+    return (
+      <View style={styles.cameraRoot}>
+        <CameraView ref={cameraRef} style={styles.cameraView} facing="back" />
+        <View style={styles.cameraOverlay}>
+          <Text style={styles.cameraHint}>
+            {imageQueue.length} photo(s) captured. Tap Capture again for next page, then Done.
+          </Text>
+          <View style={styles.row}>
+            <Pressable style={styles.secondaryBtn} onPress={closeCamera}>
+              <Text style={styles.secondaryBtnText}>Done</Text>
+            </Pressable>
+            <Pressable style={[styles.button, styles.secondaryBtnRight]} onPress={captureInCamera}>
+              <Text style={styles.buttonText}>Capture</Text>
+            </Pressable>
+          </View>
+        </View>
+      </View>
+    );
+  }
+
   return (
     <KeyboardAvoidingView
       style={styles.root}
@@ -418,7 +445,7 @@ export default function App() {
         <Text style={styles.label}>Photo queue</Text>
         <Text style={styles.queueHint}>
           {imageQueue.length === 0
-            ? 'No photos yet. Tap Add photo for each sheet or page.'
+            ? 'No photos yet. Open camera, capture pages continuously, then tap Done.'
             : `${imageQueue.length} photo(s) ready — tap Send all when finished.`}
         </Text>
 
@@ -429,10 +456,10 @@ export default function App() {
               pressed && styles.buttonPressed,
               busy && styles.buttonDisabled,
             ]}
-            onPress={addPhotoToQueue}
+            onPress={openMultiCaptureCamera}
             disabled={busy}
           >
-            <Text style={styles.secondaryBtnText}>Add photo</Text>
+            <Text style={styles.secondaryBtnText}>Open camera</Text>
           </Pressable>
           <Pressable
             style={({ pressed }) => [
@@ -491,6 +518,27 @@ export default function App() {
 }
 
 const styles = StyleSheet.create({
+  cameraRoot: {
+    flex: 1,
+    backgroundColor: '#000',
+  },
+  cameraView: {
+    flex: 1,
+  },
+  cameraOverlay: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    padding: 16,
+    backgroundColor: 'rgba(15,23,42,0.88)',
+  },
+  cameraHint: {
+    color: '#e2e8f0',
+    fontSize: 14,
+    lineHeight: 20,
+    marginBottom: 10,
+  },
   root: {
     flex: 1,
     backgroundColor: '#0f172a',

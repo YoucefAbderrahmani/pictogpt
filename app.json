@@ -15,6 +15,12 @@
           "photosPermission": "Allow $(PRODUCT_NAME) to access photos if you pick from the library."
         }
       ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow $(PRODUCT_NAME) to use the camera to capture multiple exam pages."
+        }
+      ],
       "expo-secure-store"
     ],
     "splash": {
