@@ -85,7 +85,19 @@ function toQcmSmsFormat(rawText) {
 const DEFAULT_PROMPT =
   'Describe what you see in this image clearly and concisely. The reply will be sent by SMS, so be direct and avoid markdown.';
 
+/** Low default avoids OpenRouter “cannot afford max_tokens” on small balances; raise via env if you have credits. */
+function envIntInRange(name, defaultVal, min, max) {
+  const raw = process.env[name];
+  if (raw == null || raw === '') return defaultVal;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return defaultVal;
+  return Math.min(max, Math.max(min, Math.floor(n)));
+}
+
+const GEMINI_MODEL_CANDIDATES = ['gemini-2.0-flash', 'gemini-2.0-flash-lite', 'gemini-1.5-flash'];
+
 async function analyzeWithOpenRouter({ key, userPrompt, dataUrl }) {
+  const maxTokens = envIntInRange('OPENROUTER_MAX_TOKENS', 1024, 256, 4096);
   const openRouterRes = await fetch('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',
     headers: {
@@ -103,7 +115,7 @@ async function analyzeWithOpenRouter({ key, userPrompt, dataUrl }) {
           ],
         },
       ],
-      max_tokens: 4096,
+      max_tokens: maxTokens,
     }),
   });
 
@@ -130,53 +142,61 @@ async function analyzeWithOpenRouter({ key, userPrompt, dataUrl }) {
 }
 
 async function analyzeWithGemini({ key, userPrompt, mime, imageBase64 }) {
-  const geminiRes = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${encodeURIComponent(
-      key
-    )}`,
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        contents: [
+  const maxOutputTokens = envIntInRange('GEMINI_MAX_OUTPUT_TOKENS', 1024, 256, 8192);
+  const body = JSON.stringify({
+    contents: [
+      {
+        parts: [
+          { text: userPrompt },
           {
-            parts: [
-              { text: userPrompt },
-              {
-                inline_data: {
-                  mime_type: mime,
-                  data: imageBase64,
-                },
-              },
-            ],
+            inline_data: {
+              mime_type: mime,
+              data: imageBase64,
+            },
           },
         ],
-        generationConfig: {
-          maxOutputTokens: 4096,
+      },
+    ],
+    generationConfig: {
+      maxOutputTokens,
+    },
+  });
+
+  const failures = [];
+  for (const model of GEMINI_MODEL_CANDIDATES) {
+    const geminiRes = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(
+        key
+      )}`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
         },
-      }),
+        body,
+      }
+    );
+
+    const json = await geminiRes.json().catch(() => ({}));
+    if (!geminiRes.ok) {
+      failures.push(`${model}: ${json?.error?.message || `HTTP ${geminiRes.status}`}`);
+      continue;
     }
-  );
 
-  const json = await geminiRes.json().catch(() => ({}));
-  if (!geminiRes.ok) {
-    const msg = json?.error?.message || `Gemini error (${geminiRes.status})`;
-    throw new Error(msg);
+    const parts = json?.candidates?.[0]?.content?.parts;
+    const content = Array.isArray(parts)
+      ? parts
+          .map((p) => (typeof p?.text === 'string' ? p.text : ''))
+          .join('')
+          .trim()
+      : '';
+    if (content) {
+      return content;
+    }
+    failures.push(`${model}: empty or blocked response`);
   }
 
-  const parts = json?.candidates?.[0]?.content?.parts;
-  const content = Array.isArray(parts)
-    ? parts
-        .map((p) => (typeof p?.text === 'string' ? p.text : ''))
-        .join('')
-        .trim()
-    : '';
-  if (!content) {
-    throw new Error('No text in model response');
-  }
-  return content;
+  throw new Error(failures.join(' | '));
 }
 
 app.get('/health', (_req, res) => {
