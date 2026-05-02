@@ -19,6 +19,17 @@ function collectApiKeyChain(envBaseName) {
   return keys;
 }
 
+/** Common paste typo: `k-or-v1-...` → `sk-or-v1-...` */
+function normalizeOpenRouterApiKey(key) {
+  const t = String(key || '').trim();
+  if (!t) return '';
+  const low = t.toLowerCase();
+  if (low.startsWith('k-or-v1-') && !low.startsWith('sk-or-v1-')) {
+    return `sk-or-v1-${t.slice(8)}`;
+  }
+  return t;
+}
+
 function auth(req) {
   const expected = (process.env.CLIENT_BEARER_TOKEN || '').trim();
   if (!expected) return true;
@@ -94,106 +105,148 @@ function envIntInRange(name, defaultVal, min, max) {
   return Math.min(max, Math.max(min, Math.floor(n)));
 }
 
-const GEMINI_MODEL_CANDIDATES = ['gemini-2.0-flash', 'gemini-2.0-flash-lite', 'gemini-1.5-flash'];
+const OPENROUTER_MODEL_CANDIDATES = ['openai/gpt-4o', 'openai/gpt-4o-mini'];
+const GEMINI_MODEL_CANDIDATES = [
+  'gemini-2.0-flash',
+  'gemini-2.0-flash-lite',
+  'gemini-1.5-flash',
+  'gemini-1.5-flash-8b',
+];
+
+function isOpenRouterTokenBudgetError(message) {
+  const m = String(message || '').toLowerCase();
+  return /afford|more credits|max_tokens|too many tokens requested/i.test(m);
+}
+
+function openRouterMessageContent(json) {
+  const msgContent = json?.choices?.[0]?.message?.content;
+  if (typeof msgContent === 'string') return msgContent.trim();
+  if (Array.isArray(msgContent)) {
+    return msgContent
+      .map((part) => (typeof part?.text === 'string' ? part.text : ''))
+      .join('')
+      .trim();
+  }
+  return '';
+}
 
 async function analyzeWithOpenRouter({ key, userPrompt, dataUrl }) {
-  const maxTokens = envIntInRange('OPENROUTER_MAX_TOKENS', 1024, 256, 4096);
-  const openRouterRes = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${key}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: 'openai/gpt-4o',
-      messages: [
-        {
-          role: 'user',
-          content: [
-            { type: 'text', text: userPrompt },
-            { type: 'image_url', image_url: { url: dataUrl } },
-          ],
+  const cap = envIntInRange('OPENROUTER_MAX_TOKENS', 1024, 256, 4096);
+  const failures = [];
+
+  for (const model of OPENROUTER_MODEL_CANDIDATES) {
+    let maxTokens = cap;
+    while (maxTokens >= 256) {
+      const openRouterRes = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${key}`,
+          'Content-Type': 'application/json',
         },
-      ],
-      max_tokens: maxTokens,
-    }),
-  });
+        body: JSON.stringify({
+          model,
+          messages: [
+            {
+              role: 'user',
+              content: [
+                { type: 'text', text: userPrompt },
+                { type: 'image_url', image_url: { url: dataUrl } },
+              ],
+            },
+          ],
+          max_tokens: maxTokens,
+        }),
+      });
 
-  const json = await openRouterRes.json().catch(() => ({}));
-  if (!openRouterRes.ok) {
-    const msg = json?.error?.message || `OpenRouter error (${openRouterRes.status})`;
-    throw new Error(msg);
+      const json = await openRouterRes.json().catch(() => ({}));
+      if (openRouterRes.ok) {
+        const content = openRouterMessageContent(json);
+        if (content) return content;
+        failures.push(`${model}@${maxTokens}: empty model response`);
+        break;
+      }
+
+      const msg = json?.error?.message || `OpenRouter error (${openRouterRes.status})`;
+      if (isOpenRouterTokenBudgetError(msg) && maxTokens > 256) {
+        maxTokens = Math.max(256, Math.floor(maxTokens / 2));
+        continue;
+      }
+      failures.push(`${model}@${maxTokens}: ${msg}`);
+      break;
+    }
   }
 
-  const msgContent = json?.choices?.[0]?.message?.content;
-  const content =
-    typeof msgContent === 'string'
-      ? msgContent.trim()
-      : Array.isArray(msgContent)
-        ? msgContent
-            .map((part) => (typeof part?.text === 'string' ? part.text : ''))
-            .join('')
-            .trim()
-        : '';
-  if (!content) {
-    throw new Error('No text in model response');
-  }
-  return content;
+  throw new Error(failures.join(' | '));
+}
+
+function isGeminiQuotaOrRateError(message) {
+  const m = String(message || '').toLowerCase();
+  return /quota|resource_exhausted|rate limit|429|too many requests/i.test(m);
 }
 
 async function analyzeWithGemini({ key, userPrompt, mime, imageBase64 }) {
-  const maxOutputTokens = envIntInRange('GEMINI_MAX_OUTPUT_TOKENS', 1024, 256, 8192);
-  const body = JSON.stringify({
-    contents: [
-      {
-        parts: [
-          { text: userPrompt },
+  const cap = envIntInRange('GEMINI_MAX_OUTPUT_TOKENS', 1024, 256, 8192);
+  const failures = [];
+
+  for (const model of GEMINI_MODEL_CANDIDATES) {
+    let maxOutputTokens = cap;
+    while (maxOutputTokens >= 256) {
+      const body = JSON.stringify({
+        contents: [
           {
-            inline_data: {
-              mime_type: mime,
-              data: imageBase64,
-            },
+            parts: [
+              { text: userPrompt },
+              {
+                inline_data: {
+                  mime_type: mime,
+                  data: imageBase64,
+                },
+              },
+            ],
           },
         ],
-      },
-    ],
-    generationConfig: {
-      maxOutputTokens,
-    },
-  });
-
-  const failures = [];
-  for (const model of GEMINI_MODEL_CANDIDATES) {
-    const geminiRes = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(
-        key
-      )}`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
+        generationConfig: {
+          maxOutputTokens,
         },
-        body,
+      });
+
+      const geminiRes = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(
+          key
+        )}`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body,
+        }
+      );
+
+      const json = await geminiRes.json().catch(() => ({}));
+      if (!geminiRes.ok) {
+        const msg = json?.error?.message || `HTTP ${geminiRes.status}`;
+        if (isGeminiQuotaOrRateError(msg) && maxOutputTokens > 256) {
+          maxOutputTokens = Math.max(256, Math.floor(maxOutputTokens / 2));
+          continue;
+        }
+        failures.push(`${model}@${maxOutputTokens}: ${msg}`);
+        break;
       }
-    );
 
-    const json = await geminiRes.json().catch(() => ({}));
-    if (!geminiRes.ok) {
-      failures.push(`${model}: ${json?.error?.message || `HTTP ${geminiRes.status}`}`);
-      continue;
+      const parts = json?.candidates?.[0]?.content?.parts;
+      const content = Array.isArray(parts)
+        ? parts
+            .map((p) => (typeof p?.text === 'string' ? p.text : ''))
+            .join('')
+            .trim()
+        : '';
+      if (content) {
+        return content;
+      }
+      failures.push(`${model}@${maxOutputTokens}: empty or blocked response`);
+      break;
     }
-
-    const parts = json?.candidates?.[0]?.content?.parts;
-    const content = Array.isArray(parts)
-      ? parts
-          .map((p) => (typeof p?.text === 'string' ? p.text : ''))
-          .join('')
-          .trim()
-      : '';
-    if (content) {
-      return content;
-    }
-    failures.push(`${model}: empty or blocked response`);
   }
 
   throw new Error(failures.join(' | '));
@@ -204,7 +257,9 @@ app.get('/health', (_req, res) => {
 });
 
 app.post('/v1/analyze', async (req, res) => {
-  const openRouterKeys = collectApiKeyChain('OPENROUTER_API_KEY');
+  const openRouterKeys = collectApiKeyChain('OPENROUTER_API_KEY')
+    .map(normalizeOpenRouterApiKey)
+    .filter(Boolean);
   const geminiKeys = collectApiKeyChain('GEMINI_API_KEY');
   if (openRouterKeys.length === 0 && geminiKeys.length === 0) {
     res.status(500).json({
