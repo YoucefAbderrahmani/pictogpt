@@ -26,27 +26,27 @@ const QCM_PROMPT = `You are reading a multiple-choice exam (QCM) from the attach
 
 How to read the image:
 - Read top-to-bottom, left-to-right.
-- **Question numbers (critical):** Use the **number printed on the exam next to each question** as JSON field `q` and in the compact SMS string. Example: if the sheet shows questions **37**, **38**, **39**, then use `q:37`, `q:38`, `q:39` and compact like **37A38B39S**—do **not** renumber them as 1, 2, 3. Only if a question has **no visible printed number**, assign `q` in order starting at 1 for those items only.
+- **Question numbers (critical):** Use the **number printed on the exam next to each question** as JSON field **q** and in the compact SMS string. Example: if the sheet shows questions **37**, **38**, **39**, then use **q** values 37, 38, 39 and compact like **37A38B39S**—do **not** renumber them as 1, 2, 3. Only if a question has **no visible printed number**, assign **q** in order starting at 1 for those items only.
 - **Image quality:** The photo may be blurry, too dark, too bright, glare, motion blur, low resolution, or cropped so text is hard to read. When **the image itself** does not let you read a question or its options reliably for that item, treat it as not clear enough—**do not guess A–E**; use **S** (skip) for that question number.
 - Transcribe each question stem exactly as printed (fix obvious OCR typos only if meaning is clear).
 - For each question, identify every answer choice. If the sheet uses numbers (1)(2)(3)(4), bullets, or symbols instead of letters, map them in order to labels A, B, C, D (and E only if a fifth option is clearly present). Always output choices with letter labels A, B, C, D in that order for the first four options.
 - Copy each choice’s text faithfully under the correct letter.
 
-How to choose "a":
+How to choose the answer field a:
 - Pick exactly one letter per question: the best answer or the one you would mark on the form. Use only A, B, C, D, or E (E only when a fifth option exists).
-- If you **cannot read** the stem or choices well enough because of **bad image quality** (blur, lighting, resolution, crop, glare, etc.), or the wording is **ambiguous or cut off**, **do not guess**. Use **S** (skipped) for that question: in JSON set `"a":"S"`. In the compact SMS string that is **printedQuestionNumber + S** (e.g. sheet question **37** unclear → **37S**). Never output a random A–E when you are not confident.
+- If you **cannot read** the stem or choices well enough because of **bad image quality** (blur, lighting, resolution, crop, glare, etc.), or the wording is **ambiguous or cut off**, **do not guess**. Use **S** (skipped) for that question: in JSON set field **a** to **S** (skip). In the compact SMS string that is **printedQuestionNumber + S** (e.g. sheet question **37** unclear → **37S**). Never output a random A–E when you are not confident.
 
 Compact answer key (required meaning of your choices):
-- For each question, options are A, B, C, D (and E if applicable), or **S** when skipped. Sort by **printed** `q` ascending, then concatenate each pair **q + letter** with no spaces (e.g. **37A38B39S**).
+- For each question, options are A, B, C, D (and E if applicable), or **S** when skipped. Sort by **printed q** ascending, then concatenate each pair **questionNumber + letter** with no spaces (e.g. **37A38B39S**).
 - Example with printed numbers: **37A38B39S** means sheet Q37→A, Q38→B, Q39 skipped. Example when sheet uses 1,2,3: **1B2D3A** means Q1→B, Q2→D, Q3→A.
-- Your JSON must match this encoding: sort "answers" by `q` ascending, then concatenating each `q` + `a` produces the compact string (multi-digit `q` is allowed).
+- Your JSON must match this encoding: sort "answers" by **q** ascending, then concatenating each **q + a** produces the compact string (multi-digit **q** is allowed).
 
 Output rules:
 - Return a single JSON object only. No markdown, no code fences, no commentary before or after.
-- Use this schema (all keys lowercase); `q` is the **printed** question number when visible (example 37), otherwise 1-based order among unnumbered items:
-{"total_questions":<number>,"answers":[{"q":37,"question":"<stem text>","choices":[{"label":"A","text":"<option A>"},{"label":"B","text":"<option B>"},{"label":"C","text":"<option C>"},{"label":"D","text":"<option D>"}],"a":"A"}, ...]}
-- Include a "choices" array for every question when options are legible; each item must have "label" (A–D or A–E) and "text" (the option wording). If the question is skipped ("a":"S"), "choices" may be an empty array [] or best-effort partial text—do not invent fake options.
-- "total_questions" must equal the length of "answers". Each `q` must be a **positive integer** matching the sheet when possible; **no duplicate `q`**. "a" must be one of A/B/C/D/E (matching an existing label when not skipped) or **S** when skipped.`;
+- Use this schema (all keys lowercase); **q** is the **printed** question number when visible (example 37), otherwise 1-based order among unnumbered items:
+{"total_questions":NUMBER,"answers":[{"q":37,"question":"STEM","choices":[{"label":"A","text":"..."},{"label":"B","text":"..."},{"label":"C","text":"..."},{"label":"D","text":"..."}],"a":"A"}, ...]}
+- Include a choices array for every question when options are legible; each item must have label (A–D or A–E) and text (the option wording). If the question is skipped (a equals S), choices may be an empty array [] or best-effort partial text—do not invent fake options.
+- "total_questions" must equal the length of "answers". Each **q** must be a **positive integer** matching the sheet when possible; **no duplicate q**. **a** must be one of A/B/C/D/E (matching an existing label when not skipped) or **S** when skipped.`;
 
 function getBackendCandidates(raw: string): string[] {
   const base = raw.trim().replace(/\/+$/, '');
