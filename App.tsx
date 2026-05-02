@@ -26,13 +26,14 @@ const QCM_PROMPT = `You are reading a multiple-choice exam (QCM) from the attach
 
 How to read the image:
 - Read top-to-bottom, left-to-right. Follow the numbering printed on the sheet (1, 2, 3…). If numbers are missing, number questions in visible order starting at 1.
+- **Image quality:** The photo may be blurry, too dark, too bright, glare, motion blur, low resolution, or cropped so text is hard to read. When **the image itself** does not let you read a question or its options reliably for that item, treat it as not clear enough—**do not guess A–E**; use **S** (skip) for that question number.
 - Transcribe each question stem exactly as printed (fix obvious OCR typos only if meaning is clear).
 - For each question, identify every answer choice. If the sheet uses numbers (1)(2)(3)(4), bullets, or symbols instead of letters, map them in order to labels A, B, C, D (and E only if a fifth option is clearly present). Always output choices with letter labels A, B, C, D in that order for the first four options.
 - Copy each choice’s text faithfully under the correct letter.
 
 How to choose "a":
 - Pick exactly one letter per question: the best answer or the one you would mark on the form. Use only A, B, C, D, or E (E only when a fifth option exists).
-- If the question stem, the image crop, or one or more answer choices are **unclear, unreadable, cut off, or ambiguous** so you cannot justify a single best letter, **do not guess**. Use **S** (skipped) for that question: in JSON set `"a":"S"`. In the compact SMS string that is **qS** (e.g. **4S** = question 4 skipped). Never output a random A–E when you are not confident.
+- If you **cannot read** the stem or choices well enough because of **bad image quality** (blur, lighting, resolution, crop, glare, etc.), or the wording is **ambiguous or cut off**, **do not guess**. Use **S** (skipped) for that question: in JSON set `"a":"S"`. In the compact SMS string that is **qS** (e.g. **4S** = question 4 skipped because the image is not clear enough there). Never output a random A–E when you are not confident.
 
 Compact answer key (required meaning of your choices):
 - Number questions 1, 2, 3, 4, … in order. For each question, options are A, B, C, D (and E if applicable), or **S** when skipped.
