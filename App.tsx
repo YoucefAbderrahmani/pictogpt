@@ -27,7 +27,7 @@ import {
   presentAnswerNotification,
   requestAnswerNotificationPermission,
 } from './lib/answerNotifications';
-import { mergeQcmSmsBodyWithTailFromModel } from './lib/qcmSmsFormat.js';
+import { mergeQcmSmsBodyWithTailFromModel, MIN_QCM_PAIRS_ACCEPT } from './lib/qcmSmsFormat.js';
 
 type QueuedImage = {
   id: string;
@@ -51,8 +51,7 @@ const KEY_ADMIN_PASSWORD = 'picture_to_sms_admin_password_v1';
 const KEY_LOBBY_RESET_ACK_NONCE = 'picture_to_sms_lobby_reset_ack_nonce_v1';
 const KEY_NOTIFY_ONBOARDING = 'picture_to_sms_notify_onboarded_v1';
 const SHARED_LOBBY_POLL_MS = 8000;
-/** Shared lobby unlock: QCM mode + compact key must look like a real sheet (enough questions). */
-const MIN_QCM_PAIRS_FOR_LOBBY = 3;
+/** Shared lobby unlock: same threshold as server `MIN_QCM_PAIRS_ACCEPT` in lib/qcmSmsFormat.js. */
 /** Legacy QCM lines: newline before a quoted tail after the compact key. */
 const QCM_TAIL_GAP = '\n';
 /** Compact QCM key only, e.g. `1A-2B-3S` or `37A-38B`. */
@@ -94,7 +93,7 @@ function looksLikeValidatedQcmCompact(smsBody: string): boolean {
     .split('-')
     .map((p) => p.trim().toUpperCase())
     .filter(Boolean);
-  if (parts.length < MIN_QCM_PAIRS_FOR_LOBBY) return false;
+  if (parts.length < MIN_QCM_PAIRS_ACCEPT) return false;
   const segment = /^\d{1,6}[ABCDES]$/;
   return parts.every((p) => segment.test(p));
 }
@@ -1911,7 +1910,7 @@ export default function App() {
               <Text style={styles.teamLobbyEmptyHint}>
                 {isAdminLoggedIn
                   ? 'Admin bypass active: shared lobby is accessible without sending a QCM photo first.'
-                  : `QCM is on by default (glowing QCM). Photograph a real QCM sheet, then Send all. The lobby unlocks only when the model returns a valid compact key (at least ${MIN_QCM_PAIRS_FOR_LOBBY} questions). Random photos will not qualify.`}
+                  : `QCM is on by default (glowing QCM). Photograph a real QCM sheet, then Send all. The lobby unlocks only when the model returns a valid compact key (at least ${MIN_QCM_PAIRS_ACCEPT} questions). Random photos will not qualify.`}
               </Text>
             ) : null}
             {lobbyAccessible && teamSharedLogs.length > 0 ? (

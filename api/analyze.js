@@ -341,7 +341,7 @@ export default async function handler(req, res) {
     if (!smsBody) {
       const errOut =
         `All OpenRouter keys failed (${attemptErrors.length} attempt(s)): ${attemptErrors.join(' | ')}` +
-        ' — Check OPENROUTER_API_KEY and credits at openrouter.ai. Default model chain tries `google/gemini-*` first, then other providers; set OPENROUTER_MODELS to customize. QCM mode needs JSON or 1A-2B-style answers.';
+        ' — Check OPENROUTER_API_KEY and credits at openrouter.ai. Default model chain tries `google/gemini-*` first, then other providers; set OPENROUTER_MODELS to customize. QCM mode needs at least 3 parsed questions (JSON or 1A-2B-style).';
       res.status(502).json({ error: errOut });
       return;
     }
