@@ -20,6 +20,7 @@ import {
 } from '../lib/geminiModelCandidates.js';
 import {
   isOpenRouterSwitchModelError,
+  openRouterMessageContent,
   openRouterModelCandidates,
   openRouterOutboundHeaders,
   readOpenRouterApiResponseBody,
@@ -160,18 +161,6 @@ function deepSeekChatCompletionsUrl() {
 function isOpenRouterTokenBudgetError(message) {
   const m = String(message || '').toLowerCase();
   return /afford|more credits|max_tokens|too many tokens requested/i.test(m);
-}
-
-function openRouterMessageContent(json) {
-  const msgContent = json?.choices?.[0]?.message?.content;
-  if (typeof msgContent === 'string') return msgContent.trim();
-  if (Array.isArray(msgContent)) {
-    return msgContent
-      .map((part) => (typeof part?.text === 'string' ? part.text : ''))
-      .join('-')
-      .trim();
-  }
-  return '';
 }
 
 async function analyzeWithOpenRouter({ key, userPrompt, dataUrl }) {

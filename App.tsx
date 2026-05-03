@@ -99,6 +99,9 @@ function looksLikeValidatedQcmCompact(smsBody: string): boolean {
   return parts.every((p) => segment.test(p));
 }
 
+/** First skipped analyze line in status bar (OpenRouter/Gemini errors can be long). */
+const FIRST_SKIP_STATUS_SNIP_LEN = 2000;
+
 const KEY_RELAY_ENABLED = 'picture_to_sms_relay_enabled';
 const KEY_RELAY_TO = 'picture_to_sms_relay_sms_to';
 const AS_RELAY_SIGNATURES = 'picture_to_sms_relay_signatures_v1';
@@ -1508,6 +1511,7 @@ export default function App() {
     const batchDisplayRows: LastBatchRow[] = [];
     const imagePrepLines: string[] = [];
     const seenAnswerNorm = new Set<string>();
+    let analyzeFailureAlerted = false;
     let duplicateSkips = 0;
     let totalOutboundDispatches = 0;
     const recipients = allValidDestinations(merged.phones);
@@ -1605,6 +1609,16 @@ export default function App() {
           const message = e instanceof Error ? e.message : String(e);
           const errLine = `${slot})__ skipped (${message})`;
           skipped.push(errLine);
+          if (
+            !analyzeFailureAlerted &&
+            (message.includes('All API keys failed') ||
+              message.includes('OpenRouter') ||
+              message.includes('Gemini') ||
+              message.length > 500)
+          ) {
+            analyzeFailureAlerted = true;
+            Alert.alert(`Page ${slot} failed`, message.slice(0, 4000));
+          }
         } finally {
           pending = rest;
           setImageQueue(pending);
@@ -1623,7 +1637,7 @@ export default function App() {
         const otherPart = other > 0 ? ` ${other} other issue(s).` : '';
         const rc = canSendSms ? recipients.length : 0;
         const firstSkip = skipped[0]
-          ? ` — ${String(skipped[0]).replace(/\s+/g, ' ').slice(0, 280)}${skipped[0].length > 280 ? '…' : ''}`
+          ? ` — ${String(skipped[0]).replace(/\s+/g, ' ').slice(0, FIRST_SKIP_STATUS_SNIP_LEN)}${skipped[0].length > FIRST_SKIP_STATUS_SNIP_LEN ? '…' : ''}`
           : '';
         setStatus(
           `Done. ${totalOutboundDispatches} identical outbound(s) (${sentBodies.length} page(s) × ${rc} destination(s)). Skipped ${skipped.length}.${dupPart}${otherPart}${firstSkip}`
