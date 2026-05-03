@@ -14,7 +14,7 @@ import {
   setSuspended,
 } from '../lib/sharedStore.js';
 import { geminiModelCandidates, isGeminiSwitchModelError } from '../lib/geminiModelCandidates.js';
-import { openRouterModelCandidates } from '../lib/openRouterModelCandidates.js';
+import { isOpenRouterSwitchModelError, openRouterModelCandidates } from '../lib/openRouterModelCandidates.js';
 import { toQcmSmsFormat } from '../lib/qcmSmsFormat.js';
 
 const app = express();
@@ -205,6 +205,10 @@ async function analyzeWithOpenRouter({ key, userPrompt, dataUrl }) {
       }
 
       const msg = json?.error?.message || `OpenRouter error (${openRouterRes.status})`;
+      if (isOpenRouterSwitchModelError(msg, openRouterRes.status)) {
+        failures.push(`${model}@${maxTokens}: ${String(msg).slice(0, 280)}`);
+        break;
+      }
       if (isOpenRouterTokenBudgetError(msg) && maxTokens > 256) {
         maxTokens = Math.max(256, Math.floor(maxTokens / 2));
         continue;
