@@ -14,19 +14,15 @@ PICTURE TO SMS — BACKEND + APK
        Example — only flagship: OPENROUTER_MODEL=google/gemini-2.5-pro
        Fallback chain: OPENROUTER_MODELS=google/gemini-2.5-pro,google/gemini-2.5-flash
        Browse ids: https://openrouter.ai/models
-       If you omit both, the server defaults to an OpenRouter chain: Google Gemini ids first, then cheaper non-Google vision models (gpt-4o-mini, Llama 3.2 11B vision, gpt-4o, Claude 3 Haiku). Quota/rate/404 skips to the next model in the list.
-       Direct Google Gemini (when GEMINI_API_KEY is set) tries a **model chain** on quota/rate/503 (default: 2.5 Flash variants → 2.0/1.5 Flash → 2.5 Pro). Override with GEMINI_MODEL (one id) or GEMINI_MODELS (comma-separated, tried in order).
+       If you omit both, the server defaults to an OpenRouter chain: Google Gemini ids first (`google/gemini-*`), then other vision models. Quota/rate/404 skips to the next model in the list.
        After changing env on Vercel: redeploy (or “Redeploy” from the latest deployment) so functions pick up new vars.
        Vercel → Project → Settings → Environment Variables: enable for Production (and Preview if you use preview URLs).
-       Note: the server tries Google Gemini (direct API) before OpenRouter when GEMINI_API_KEY is set.
-       To actually use OpenRouter for vision, remove or unset GEMINI_API_KEY in that environment (keep only OPENROUTER_API_KEY).
-       GEMINI_API_KEY = primary Gemini key (tried first; then OpenRouter, then DeepSeek if set)
-       GEMINI_API_KEY_2, _3, _4 = optional extra Gemini keys (same order)
+       Analysis uses OpenRouter only — set OPENROUTER_API_KEY (required). There is no direct Google Gemini API or DeepSeek path in /v1/analyze.
        CLIENT_BEARER_TOKEN = any long random secret (recommended)
 
    Optional — Google Document AI (server-side “document scanner” quality for burst camera photos)
    The phone stays on fast burst capture; each /v1/analyze call can run Document AI first (deskewed page
-   image when the processor returns it), then OpenRouter/Gemini. Not the ML Kit on-phone UI — same GCP family.
+   image when the processor returns it), then OpenRouter. Not the ML Kit on-phone UI — same GCP family.
 
    A) In Google Cloud Console (one-time)
    - Pick or create a project. Note the Project ID (not only the display name).
@@ -81,7 +77,6 @@ PICTURE TO SMS — BACKEND + APK
    - Variables (service -> Variables):
        OPENROUTER_API_KEY (and optional OPENROUTER_API_KEY_2, _3, _4)
        Optional: OPENROUTER_MODEL or OPENROUTER_MODELS (same as Vercel list above)
-       GEMINI_API_KEY (and optional GEMINI_API_KEY_2, _3, _4)
        CLIENT_BEARER_TOKEN = any long random secret (recommended)
        Same Document AI variables as in Option A if you use server-side deskew (GOOGLE_SERVICE_ACCOUNT_JSON or
        GOOGLE_SERVICE_ACCOUNT_JSON_BASE64, DOCUMENT_AI_PROJECT_ID, DOCUMENT_AI_LOCATION, DOCUMENT_AI_PROCESSOR_ID)

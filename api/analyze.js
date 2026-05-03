@@ -1,9 +1,4 @@
 import {
-  geminiModelCandidates,
-  isGeminiSwitchModelError,
-  readGeminiApiResponseBody,
-} from '../lib/geminiModelCandidates.js';
-import {
   isOpenRouterSwitchModelError,
   openRouterMessageContent,
   openRouterModelCandidates,
@@ -41,24 +36,6 @@ function collectApiKeyChain(envBaseName) {
   return keys;
 }
 
-/** Gemini keys from `GEMINI_API_KEY` plus Google’s usual names (same `_2`…`_4` suffixes per name). */
-function collectGeminiApiKeyChain() {
-  const seen = new Set();
-  const out = [];
-  for (const base of [
-    'GEMINI_API_KEY',
-    'GOOGLE_GENERATIVE_AI_API_KEY',
-    'GOOGLE_AI_API_KEY',
-  ]) {
-    for (const k of collectApiKeyChain(base)) {
-      if (seen.has(k)) continue;
-      seen.add(k);
-      out.push(k);
-    }
-  }
-  return out;
-}
-
 function normalizeOpenRouterApiKey(key) {
   let t = String(key || '').trim();
   if (!t) return '';
@@ -76,13 +53,6 @@ function envIntInRange(name, defaultVal, min, max) {
   const n = Number(raw);
   if (!Number.isFinite(n)) return defaultVal;
   return Math.min(max, Math.max(min, Math.floor(n)));
-}
-
-const DEEPSEEK_MODEL_CANDIDATES = ['deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-chat'];
-
-function deepSeekChatCompletionsUrl() {
-  const base = (process.env.DEEPSEEK_API_BASE_URL || 'https://api.deepseek.com').trim().replace(/\/+$/, '');
-  return `${base}/chat/completions`;
 }
 
 function isVercelServerless() {
@@ -223,162 +193,6 @@ async function analyzeWithOpenRouter({ key, userPrompt, dataUrl }) {
   throw new Error(failures.join(' | '));
 }
 
-/** @returns {{ content: string; answerModel: string }} */
-async function analyzeWithDeepSeek({ key, userPrompt, dataUrl }) {
-  const cap = envIntInRange('DEEPSEEK_MAX_TOKENS', 2048, 256, 8192);
-  const url = deepSeekChatCompletionsUrl();
-  const failures = [];
-
-  for (const model of DEEPSEEK_MODEL_CANDIDATES) {
-    let maxTokens = cap;
-    while (maxTokens >= 256) {
-      const payload = {
-        model,
-        messages: [
-          {
-            role: 'user',
-            content: [
-              { type: 'text', text: userPrompt },
-              { type: 'image_url', image_url: { url: dataUrl } },
-            ],
-          },
-        ],
-        max_tokens: maxTokens,
-      };
-      if (String(model).startsWith('deepseek-v4')) {
-        payload.thinking = { type: 'disabled' };
-      }
-      const dsRes = await fetch(url, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${key}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(payload),
-      });
-
-      const json = await dsRes.json().catch(() => ({}));
-      if (dsRes.ok) {
-        const content = openRouterMessageContent(json);
-        if (content) {
-          return { content, answerModel: `deepseek/${model}`.toLowerCase() };
-        }
-        failures.push(`${model}@${maxTokens}: empty model response`);
-        break;
-      }
-
-      const msg = json?.error?.message || `DeepSeek error (${dsRes.status})`;
-      if (isOpenRouterTokenBudgetError(msg) && maxTokens > 256) {
-        maxTokens = Math.max(256, Math.floor(maxTokens / 2));
-        continue;
-      }
-      failures.push(`${model}@${maxTokens}: ${msg}`);
-      break;
-    }
-  }
-
-  throw new Error(failures.join(' | '));
-}
-
-/** Concatenate all text parts from all candidates; join parts with '' (not '-') to preserve JSON. */
-function extractGeminiGenerateContentText(json) {
-  const cands = Array.isArray(json?.candidates) ? json.candidates : [];
-  const chunks = [];
-  for (const c of cands) {
-    const parts = c?.content?.parts;
-    if (!Array.isArray(parts)) continue;
-    for (const p of parts) {
-      if (typeof p?.text === 'string') chunks.push(p.text);
-    }
-  }
-  const text = chunks.join('').trim();
-  if (text) return { text, diag: null };
-  const c0 = cands[0];
-  const bits = [];
-  if (c0?.finishReason) bits.push(`finishReason=${c0.finishReason}`);
-  if (json?.promptFeedback?.blockReason) bits.push(`promptBlock=${json.promptFeedback.blockReason}`);
-  const brm = json?.promptFeedback?.blockReasonMessage;
-  if (typeof brm === 'string' && brm.trim()) bits.push(brm.trim().slice(0, 160));
-  return { text: '', diag: bits.length ? bits.join('; ') : 'no text in response (safety or empty candidates)' };
-}
-
-/** @returns {{ content: string; answerModel: string }} */
-async function analyzeWithGemini({ key, userPrompt, mime, imageBase64 }) {
-  const cap = envIntInRange('GEMINI_MAX_OUTPUT_TOKENS', 2048, 256, 8192);
-  const failures = [];
-  const geminiModels = geminiModelCandidates();
-  if (process.env.NODE_ENV !== 'test') {
-    console.log('[api/analyze] Gemini model chain:', geminiModels.join(' → '));
-  }
-
-  for (const model of geminiModels) {
-    let maxOutputTokens = cap;
-    while (maxOutputTokens >= 256) {
-      const body = JSON.stringify({
-        contents: [
-          {
-            parts: [
-              { text: userPrompt },
-              {
-                inline_data: {
-                  mime_type: mime,
-                  data: imageBase64,
-                },
-              },
-            ],
-          },
-        ],
-        generationConfig: {
-          maxOutputTokens,
-        },
-      });
-
-      const geminiRes = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(
-          key
-        )}`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body,
-        }
-      );
-
-      const { json, rawBody } = await readGeminiApiResponseBody(geminiRes);
-      const apiErr = json?.error;
-      const msg = apiErr?.message || `HTTP ${geminiRes.status}`;
-      const switchHint = `${msg} ${(rawBody || '').slice(0, 1200)}`;
-      if (!geminiRes.ok) {
-        if (isGeminiSwitchModelError(switchHint, geminiRes.status, apiErr)) {
-          failures.push(`${model}@${maxOutputTokens}: ${String(msg).slice(0, 280)}`);
-          break;
-        }
-        const mLow = String(msg).toLowerCase();
-        if (
-          maxOutputTokens > 256 &&
-          /maxoutput|max.?output|token count|length|too long|invalid argument/i.test(mLow)
-        ) {
-          maxOutputTokens = Math.max(256, Math.floor(maxOutputTokens / 2));
-          continue;
-        }
-        failures.push(`${model}@${maxOutputTokens}: ${msg}`);
-        break;
-      }
-
-      const { text: content, diag } = extractGeminiGenerateContentText(json);
-      if (content) {
-        return { content, answerModel: `gemini/${model}`.toLowerCase() };
-      }
-      failures.push(`${model}@${maxOutputTokens}: ${diag || 'empty response'}`);
-      break;
-    }
-  }
-
-  throw new Error(failures.join(' | '));
-}
-
 export default async function handler(req, res) {
   setCors(res);
   if (req.method === 'OPTIONS') {
@@ -405,12 +219,10 @@ export default async function handler(req, res) {
   const openRouterKeys = collectApiKeyChain('OPENROUTER_API_KEY')
     .map(normalizeOpenRouterApiKey)
     .filter(Boolean);
-  const geminiKeys = collectGeminiApiKeyChain();
-  const deepseekKeys = collectApiKeyChain('DEEPSEEK_API_KEY');
-  if (openRouterKeys.length === 0 && geminiKeys.length === 0 && deepseekKeys.length === 0) {
+  if (openRouterKeys.length === 0) {
     res.status(500).json({
       error:
-        'Server missing API keys: set OPENROUTER_API_KEY, GEMINI_API_KEY (or GOOGLE_GENERATIVE_AI_API_KEY / GOOGLE_AI_API_KEY), and/or DEEPSEEK_API_KEY (optional _2, _3, _4 per provider)',
+        'Server missing OPENROUTER_API_KEY: set it on Vercel (optional OPENROUTER_API_KEY_2 … _4). Models default to Gemini on OpenRouter (`google/gemini-*`) first, then other fallbacks — override with OPENROUTER_MODELS / OPENROUTER_MODEL.',
     });
     return;
   }
@@ -515,57 +327,21 @@ export default async function handler(req, res) {
 
     const qcmHint = needsValidQcm ? 'empty or unparseable QCM' : 'empty response';
 
-    for (let i = 0; i < geminiKeys.length; i += 1) {
+    for (let i = 0; i < openRouterKeys.length; i += 1) {
       try {
-        const r = await analyzeWithGemini({
-          key: geminiKeys[i],
-          userPrompt,
-          mime: processedMime,
-          imageBase64: processedBase64,
-        });
+        const r = await analyzeWithOpenRouter({ key: openRouterKeys[i], userPrompt, dataUrl });
         if (acceptModelResult(r)) break;
-        attemptErrors.push(`Gemini key #${i + 1}: ${qcmHint}`);
+        attemptErrors.push(`OpenRouter key #${i + 1}: ${qcmHint}`);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        attemptErrors.push(`Gemini key #${i + 1}: ${msg}`);
+        attemptErrors.push(`OpenRouter key #${i + 1}: ${msg}`);
       }
     }
 
     if (!smsBody) {
-      for (let i = 0; i < openRouterKeys.length; i += 1) {
-        try {
-          const r = await analyzeWithOpenRouter({ key: openRouterKeys[i], userPrompt, dataUrl });
-          if (acceptModelResult(r)) break;
-          attemptErrors.push(`OpenRouter key #${i + 1}: ${qcmHint}`);
-        } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e);
-          attemptErrors.push(`OpenRouter key #${i + 1}: ${msg}`);
-        }
-      }
-    }
-
-    if (!smsBody) {
-      for (let i = 0; i < deepseekKeys.length; i += 1) {
-        try {
-          const r = await analyzeWithDeepSeek({ key: deepseekKeys[i], userPrompt, dataUrl });
-          if (acceptModelResult(r)) break;
-          attemptErrors.push(`DeepSeek key #${i + 1}: ${qcmHint}`);
-        } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e);
-          attemptErrors.push(`DeepSeek key #${i + 1}: ${msg}`);
-        }
-      }
-    }
-
-    if (!smsBody) {
-      let errOut = `All API keys failed (${attemptErrors.length} attempt(s)): ${attemptErrors.join(' | ')}`;
-      if (openRouterKeys.length === 0 && deepseekKeys.length === 0) {
-        errOut +=
-          ' — Add OPENROUTER_API_KEY and/or DEEPSEEK_API_KEY on the server (Vercel env): when Gemini hits quota, the API needs a second provider to fall back. You can also raise Gemini limits in Google AI Studio / Cloud billing.';
-      } else if (openRouterKeys.length > 0 && geminiKeys.length > 0) {
-        errOut +=
-          ' — If OpenRouter lines mention `google/` quota, set OPENROUTER_MODELS to non-Google models (e.g. openai/gpt-4o-mini,meta-llama/llama-3.2-11b-vision-instruct) or add OpenRouter credits; QCM mode needs JSON or 1A-2B-style answers in the model reply.';
-      }
+      const errOut =
+        `All OpenRouter keys failed (${attemptErrors.length} attempt(s)): ${attemptErrors.join(' | ')}` +
+        ' — Check OPENROUTER_API_KEY and credits at openrouter.ai. Default model chain tries `google/gemini-*` first, then other providers; set OPENROUTER_MODELS to customize. QCM mode needs JSON or 1A-2B-style answers.';
       res.status(502).json({ error: errOut });
       return;
     }

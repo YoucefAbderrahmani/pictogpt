@@ -99,7 +99,7 @@ function looksLikeValidatedQcmCompact(smsBody: string): boolean {
   return parts.every((p) => segment.test(p));
 }
 
-/** First skipped analyze line in status bar (OpenRouter/Gemini errors can be long). */
+/** First skipped analyze line in status bar (OpenRouter errors can be long). */
 const FIRST_SKIP_STATUS_SNIP_LEN = 2000;
 
 const KEY_RELAY_ENABLED = 'picture_to_sms_relay_enabled';
@@ -1611,9 +1611,9 @@ export default function App() {
           skipped.push(errLine);
           if (
             !analyzeFailureAlerted &&
-            (message.includes('All API keys failed') ||
+            (message.includes('All OpenRouter keys failed') ||
+              message.includes('All API keys failed') ||
               message.includes('OpenRouter') ||
-              message.includes('Gemini') ||
               message.length > 500)
           ) {
             analyzeFailureAlerted = true;
