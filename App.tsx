@@ -165,7 +165,7 @@ Compact answer key (required meaning of your choices):
 
 Output rules:
 - Return a single JSON object only. No markdown, no code fences, no commentary before or after.
-- Each answer must include **question** (the stem text as printed on the sheet). The server builds the SMS body as **two lines with no double quotes**: line 1 is **printed q** then **)** then **___** (three underscores) then the **first 7 characters** of the **lowest-q** question’s stem; line 2 is the compact key (e.g. **37A-38B-39S**).
+- Each answer must include **question** (the stem text as printed on the sheet). The server builds the SMS body as **two lines with no double quotes**: line 1 is **printed q** then **)** then **___** (three underscores) then the **first 14 characters** of the **lowest-q** question’s stem, then **:** (colon); line 2 is the compact key (e.g. **37A-38B-39S**).
 - For every non-skipped answer, each **choices** item must include accurate **text** (full option wording as printed).
 - Use this schema (all keys lowercase); **q** is the **printed** question number when visible (example 37), otherwise 1-based order among unnumbered items:
 {"total_questions":NUMBER,"answers":[{"q":37,"question":"STEM","choices":[{"label":"A","text":"..."},{"label":"B","text":"..."},{"label":"C","text":"..."},{"label":"D","text":"..."}],"a":"A"}, ...]}
