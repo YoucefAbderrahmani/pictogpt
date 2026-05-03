@@ -13,8 +13,16 @@ import {
   setNetworkSettings,
   setSuspended,
 } from '../lib/sharedStore.js';
-import { geminiModelCandidates, isGeminiSwitchModelError } from '../lib/geminiModelCandidates.js';
-import { isOpenRouterSwitchModelError, openRouterModelCandidates } from '../lib/openRouterModelCandidates.js';
+import {
+  geminiModelCandidates,
+  isGeminiSwitchModelError,
+  readGeminiApiResponseBody,
+} from '../lib/geminiModelCandidates.js';
+import {
+  isOpenRouterSwitchModelError,
+  openRouterModelCandidates,
+  readOpenRouterApiResponseBody,
+} from '../lib/openRouterModelCandidates.js';
 import { toQcmSmsFormat } from '../lib/qcmSmsFormat.js';
 
 const app = express();
@@ -55,8 +63,9 @@ function collectGeminiApiKeyChain() {
 
 /** Common paste typo: `k-or-v1-...` → `sk-or-v1-...` */
 function normalizeOpenRouterApiKey(key) {
-  const t = String(key || '').trim();
+  let t = String(key || '').trim();
   if (!t) return '';
+  if (/^bearer\s+/i.test(t)) t = t.replace(/^bearer\s+/i, '').trim();
   const low = t.toLowerCase();
   if (low.startsWith('k-or-v1-') && !low.startsWith('sk-or-v1-')) {
     return `sk-or-v1-${t.slice(8)}`;
@@ -194,7 +203,7 @@ async function analyzeWithOpenRouter({ key, userPrompt, dataUrl }) {
         }),
       });
 
-      const json = await openRouterRes.json().catch(() => ({}));
+      const { json, rawBody } = await readOpenRouterApiResponseBody(openRouterRes);
       if (openRouterRes.ok) {
         const content = openRouterMessageContent(json);
         if (content) {
@@ -205,7 +214,8 @@ async function analyzeWithOpenRouter({ key, userPrompt, dataUrl }) {
       }
 
       const msg = json?.error?.message || `OpenRouter error (${openRouterRes.status})`;
-      if (isOpenRouterSwitchModelError(msg, openRouterRes.status)) {
+      const switchHint = `${msg} ${(rawBody || '').slice(0, 1200)}`;
+      if (isOpenRouterSwitchModelError(switchHint, openRouterRes.status)) {
         failures.push(`${model}@${maxTokens}: ${String(msg).slice(0, 280)}`);
         break;
       }
@@ -339,10 +349,12 @@ async function analyzeWithGemini({ key, userPrompt, mime, imageBase64 }) {
         }
       );
 
-      const json = await geminiRes.json().catch(() => ({}));
+      const { json, rawBody } = await readGeminiApiResponseBody(geminiRes);
+      const apiErr = json?.error;
+      const msg = apiErr?.message || `HTTP ${geminiRes.status}`;
+      const switchHint = `${msg} ${(rawBody || '').slice(0, 1200)}`;
       if (!geminiRes.ok) {
-        const msg = json?.error?.message || `HTTP ${geminiRes.status}`;
-        if (isGeminiSwitchModelError(msg, geminiRes.status, json?.error)) {
+        if (isGeminiSwitchModelError(switchHint, geminiRes.status, apiErr)) {
           failures.push(`${model}@${maxOutputTokens}: ${String(msg).slice(0, 280)}`);
           break;
         }
@@ -522,9 +534,15 @@ app.post('/v1/analyze', async (req, res) => {
     }
 
     if (!smsBody) {
-      res.status(502).json({
-        error: `All API keys failed (${attemptErrors.length} attempt(s)): ${attemptErrors.join(' | ')}`,
-      });
+      let errOut = `All API keys failed (${attemptErrors.length} attempt(s)): ${attemptErrors.join(' | ')}`;
+      if (openRouterKeys.length === 0 && deepseekKeys.length === 0) {
+        errOut +=
+          ' — Add OPENROUTER_API_KEY and/or DEEPSEEK_API_KEY on the server (Vercel env): when Gemini hits quota, the API needs a second provider to fall back. You can also raise Gemini limits in Google AI Studio / Cloud billing.';
+      } else if (openRouterKeys.length > 0 && geminiKeys.length > 0) {
+        errOut +=
+          ' — If OpenRouter lines mention `google/` quota, set OPENROUTER_MODELS to non-Google models (e.g. openai/gpt-4o-mini,meta-llama/llama-3.2-11b-vision-instruct) or add OpenRouter credits; QCM mode needs JSON or 1A-2B-style answers in the model reply.';
+      }
+      res.status(502).json({ error: errOut });
       return;
     }
     try {
