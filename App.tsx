@@ -144,35 +144,34 @@ function allValidDestinations(slots: string[]): string[] {
 
 const DEFAULT_PROMPT =
   'Describe what you see in this image clearly and concisely. Keep the reply short and plain text (no markdown).';
-const QCM_PROMPT = `You are reading a multiple-choice exam (QCM) from the attached image. Your job is to OCR and reason accurately.
+const QCM_PROMPT = `You are reading a multiple-choice exam (QCM) from the attached image. Your job is to OCR, **detect each question and its answer options**, and output **one unified JSON format** so the compact key is always like **1A-2B-3C** (question number + letter, sorted by question number).
 
-How to read the image:
-- Read top-to-bottom, left-to-right.
-- **Question numbers (critical):** Use the **number printed on the exam next to each question** as JSON field **q** and in the compact answer string. Example: if the sheet shows questions **37**, **38**, **39**, then use **q** values 37, 38, 39 and compact like **37A-38B-39S**—do **not** renumber them as 1, 2, 3. If a question number is visible (for example **40**) and the next question below it on the same page has no visible number, infer it as the next number (**41**), then continue sequentially (**42**, ... ) until printed numbering appears again.
-- **Layouts and “reversed” sheets:** The stem may appear **above or below** the options, or options may come first. A block belongs to one question if it is visually grouped (same column, indentation, or spacing). Treat every distinct question block separately even if numbering style changes mid-page.
-- **Option lines that are not A/B/C/D:** Many sheets label options with **numeric prefixes** (e.g. **1- answer**, **2- answer**, **1)** text, **(1)** text), **dashes** (**- answer**, **-answer**, **—**), **asterisks** (**\* answer**, **\*answer**), **bullets** (•, ◦), or **roman numerals**. Read them in **top-to-bottom (or left-to-right) order** within that question and map the **1st option → A**, **2nd → B**, **3rd → C**, **4th → D**, **5th → E** when a fifth option exists. Do **not** confuse **option** numbering (1-, 2-, bullets) with **question** numbering: question **q** is the number printed for the whole item (often before the stem); if only sub-lines use 1-, 2-, those are usually **choices**, not new questions.
-- **Image quality:** The photo may be blurry, too dark, too bright, glare, motion blur, low resolution, or cropped so text is hard to read. When **the image itself** does not let you read a question or its options reliably for that item, treat it as not clear enough—**do not guess A–E**; use **S** (skip) for that question number.
-- Transcribe each question stem exactly as printed (fix obvious OCR typos only if meaning is clear).
-- For each question, identify every answer choice. If the sheet uses numbers (1)(2)(3)(4), bullets, dashes, asterisks, or symbols instead of letters, map them in order to labels A, B, C, D (and E only if a fifth option is clearly present). Always output choices with letter labels A, B, C, D in that order for the first four options.
-- Copy each choice’s text faithfully under the correct letter (strip the leading marker from the text when storing **text**, e.g. store the wording after **1-** or **\*** or **-**, not the marker itself, unless the marker is part of the printed wording).
+How to find questions and assign **q** (question number):
+- Read top-to-bottom, left-to-right (or follow clear columns). Each **question** is a stem plus the set of choices that belong to it (same visual group: spacing, indentation, box, or column).
+- **If the sheet prints a question number** next to or in the heading for that item (e.g. 37, Q5, “Question 12”), use that integer as **q**. Keep multi-page logic: do **not** renumber real printed numbers (e.g. 37, 38, 39 stay 37, 38, 39).
+- **If a question has no printed number**, assign **q** from **reading order on this page/image only**: the first question you identify is **q=1**, the next is **q=2**, then **3**, and so on. When printed numbers resume later, switch back to printed values for those items.
+- Stems may appear **above or below** the options, or options may be listed first (“reversed” layout). Use layout and grouping to decide which options belong to which stem—do not split one question across two **q** values.
 
-How to choose the answer field a:
-- Pick exactly one letter per question: the best answer or the one you would mark on the form. Use only A, B, C, D, or E (E only when a fifth option exists).
-- If you **cannot read** the stem or choices well enough because of **bad image quality** (blur, lighting, resolution, crop, glare, etc.), or the wording is **ambiguous or cut off**, **do not guess**. Use **S** (skipped) for that question: in JSON set field **a** to **S** (skip). In the compact answer string that is **printedQuestionNumber + S** (e.g. sheet question **37** unclear → **37S**). Never output a random A–E when you are not confident.
+How to find answers and normalize to **A B C D** (and **E** if needed):
+- In JSON, every choice must use **label** A, B, C, D (and E only if a fifth option clearly exists on the sheet).
+- **If the sheet already labels options A/B/C/D** (or a/b/c/d), keep that mapping: label A = first letter option, etc.
+- **If options are not lettered** (numbered lines like 1- / 2-, (1) (2), bullets *, dashes -, roman numerals, etc.), **enumerate in reading order** within that question: **1st option → A**, **2nd → B**, **3rd → C**, **4th → D**, **5th → E**. Do **not** treat option prefixes (1-, 2-, *) as question numbers—those are almost always **choices** under the current stem.
+- Store each choice **text** as the real wording (you may strip leading markers like “1-” or “*” from the stored text unless they are clearly part of the printed sentence).
 
-Compact answer key (required meaning of your choices):
-- For each question, options are A, B, C, D (and E if applicable), or **S** when skipped. Sort by **printed q** ascending, then join each pair **questionNumber + letter** with '-' and no spaces (e.g. **37A-38B-39S**).
-- Example with printed numbers: **37A-38B-39S** means sheet Q37→A, Q38→B, Q39 skipped. Example when sheet uses 1,2,3: **1B-2D-3A** means Q1→B, Q2→D, Q3→A.
-- Your JSON must match this encoding: sort "answers" by **q** ascending, then joining each **q + a** pair with '-' produces the compact string (multi-digit **q** is allowed).
+Choosing **a** (the selected answer) and compact key:
+- For each question pick exactly one of A/B/C/D/E that you would mark, or **S** if you must skip (illegible or ambiguous—do not guess A–E). Skipped items use **q** plus **S** in the compact string (e.g. **37S**).
+- **Compact key (required):** sort **answers** by **q** ascending, then concatenate **q** immediately followed by **a** for each row, joined by **-** with no spaces. Examples: **1A-2B-3C**, **37A-38B-39S**. This is the only compact encoding.
+
+Image quality:
+- If blur, crop, glare, or resolution prevents reading a question or its options reliably, use **S** for that **q** instead of inventing letters.
 
 Output rules:
 - Return a single JSON object only. No markdown, no code fences, no commentary before or after.
-- Each answer must include **question** (the stem text as printed on the sheet). The server builds the SMS body as **two lines with no double quotes**: line 1 is **printed q** then **)** then the **first 11 characters** of the **lowest-q** question’s stem, then a **space** and **...** (three dots); there is **no** triple-underscore separator. Line 2 is the compact key (e.g. **37A-38B-39S**).
-- For every non-skipped answer, each **choices** item must include accurate **text** (full option wording as printed).
-- Use this schema (all keys lowercase); **q** is the **printed** question number when visible (example 37), otherwise 1-based order among unnumbered items:
+- Each answer object must include **question** (stem as printed). The server builds a two-line SMS (no ASCII double quotes): line 1 = **q** + **)** + first **11** characters of the **lowest-q** question stem + space + three dots; line 2 = the compact key only.
+- For every non-skipped answer, each **choices** item needs accurate **text** (full wording as printed).
+- Schema (keys lowercase):
 {"total_questions":NUMBER,"answers":[{"q":37,"question":"STEM","choices":[{"label":"A","text":"..."},{"label":"B","text":"..."},{"label":"C","text":"..."},{"label":"D","text":"..."}],"a":"A"}, ...]}
-- Include a choices array for every question when options are legible; each item must have label (A–D or A–E) and text (the option wording). If the question is skipped (a equals S), choices may be an empty array [] or best-effort partial text—do not invent fake options.
-- "total_questions" must equal the length of "answers". Each **q** must be a **positive integer** matching the sheet when possible; **no duplicate q**. **a** must be one of A/B/C/D/E (matching an existing label when not skipped) or **S** when skipped.`;
+- Include **choices** when legible; skipped questions may use [] or partial choices. **total_questions** equals **answers** length. **q** positive integers, no duplicates. **a** is A/B/C/D/E or **S**.`;
 
 function getBackendCandidates(raw: string): string[] {
   const base = raw.trim().replace(/\/+$/, '');
