@@ -53,12 +53,12 @@ const KEY_NOTIFY_ONBOARDING = 'picture_to_sms_notify_onboarded_v1';
 const SHARED_LOBBY_POLL_MS = 8000;
 /** Shared lobby unlock: QCM mode + compact key must look like a real sheet (enough questions). */
 const MIN_QCM_PAIRS_FOR_LOBBY = 3;
-/** Spaces before quoted chosen-option text (matches server `QCM_TAIL_GAP`). */
-const QCM_TAIL_GAP = '   ';
+/** Newline before quoted chosen-option text (matches server `QCM_TAIL_GAP` in `lib/qcmSmsFormat.js`). */
+const QCM_TAIL_GAP = '\n';
 /** Compact QCM key only, e.g. `1A-2B-3S` or `37A-38B`. */
 const COMPACT_QCM_BODY = /^(\d{1,6}[ABCDES])(-\d{1,6}[ABCDES])*$/i;
 
-/** Extract compact key from SMS body (optional legacy stem, or `compact   "tail"`). */
+/** Extract compact key from SMS body (optional legacy stem, `compact\n"tail"`, or legacy `compact   "tail"`). */
 function extractQcmCompactFromSmsBody(smsBody: string): string | null {
   const t = String(smsBody || '').trim();
   const legacy = /^"[^"]*"\s*__+\s*(.+)$/i.exec(t);
@@ -72,7 +72,8 @@ function extractQcmCompactFromSmsBody(smsBody: string): string | null {
     const c = neu[1];
     return COMPACT_QCM_BODY.test(c) ? c : null;
   }
-  const idx = t.search(/\s{3,}"/);
+  let idx = t.search(/\r?\n\s*"/);
+  if (idx < 0) idx = t.search(/\s{3,}"/);
   if (idx >= 0) {
     const head = t.slice(0, idx).trim().replace(/\s+/g, '');
     return COMPACT_QCM_BODY.test(head) ? head : null;
@@ -159,7 +160,7 @@ Compact answer key (required meaning of your choices):
 
 Output rules:
 - Return a single JSON object only. No markdown, no code fences, no commentary before or after.
-- For every non-skipped answer, each **choices** item must include accurate **text** (full option wording as printed). The server appends the **full text of the option selected for the first non-skipped question in sort order** after the compact key in the SMS (three spaces, then that text in quotes).
+- For every non-skipped answer, each **choices** item must include accurate **text** (full option wording as printed). The server appends the **full text of the option selected for the first non-skipped question in sort order** after the compact key in the SMS (a new line, then that text in quotes).
 - Optional: **first_answer_tail** (string) — if set, the server uses this verbatim as that quoted tail (use when choice objects are incomplete).
 - Use this schema (all keys lowercase); **q** is the **printed** question number when visible (example 37), otherwise 1-based order among unnumbered items:
 {"total_questions":NUMBER,"first_answer_tail":"","answers":[{"q":37,"question":"STEM","choices":[{"label":"A","text":"..."},{"label":"B","text":"..."},{"label":"C","text":"..."},{"label":"D","text":"..."}],"a":"A"}, ...]}
@@ -220,7 +221,7 @@ function compactQcmPayloadSansSlotPrefix(s: string): string | null {
   return extractQcmCompactFromSmsBody(t) ? t : null;
 }
 
-/** Payload after `N)__`: `1A-2B   "tail"`, legacy quoted-stem formats, or plain compact. */
+/** Payload after `N)__`: `1A-2B\n"tail"`, legacy `1A-2B   "tail"`, legacy quoted-stem formats, or plain compact. */
 function parseAnswerKeyRest(rest: string): { display: string } | null {
   const restTrim = rest.trim();
   if (!restTrim || /\bskipped\b/i.test(restTrim)) return null;
@@ -240,6 +241,10 @@ function parseAnswerKeyRest(rest: string): { display: string } | null {
     return { display: compact };
   }
 
+  const withTailNl = /^((?:\d{1,6}[ABCDES])(?:-\d{1,6}[ABCDES])*)\s*\r?\n\s*("[^"]*")\s*$/i.exec(restTrim);
+  if (withTailNl) {
+    return { display: `${withTailNl[1]}${QCM_TAIL_GAP}${withTailNl[2]}` };
+  }
   const withTail = /^((?:\d{1,6}[ABCDES])(?:-\d{1,6}[ABCDES])*)\s{3,}("[^"]*")\s*$/i.exec(restTrim);
   if (withTail) {
     return { display: `${withTail[1]}${QCM_TAIL_GAP}${withTail[2]}` };
