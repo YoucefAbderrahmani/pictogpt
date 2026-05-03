@@ -160,8 +160,8 @@ Compact answer key (required meaning of your choices):
 
 Output rules:
 - Return a single JSON object only. No markdown, no code fences, no commentary before or after.
-- For every non-skipped answer, each **choices** item must include accurate **text** (full option wording as printed). The server appends the **full text of the option selected for the first non-skipped question in sort order** after the compact key in the SMS (a new line, then that text in quotes).
-- Optional: **first_answer_tail** (string) — if set, the server uses this verbatim as that quoted tail (use when choice objects are incomplete).
+- For every non-skipped answer, each **choices** item must include accurate **text** (full option wording as printed). The server shortens that wording for the SMS tail to the **first word, maximum 5 characters**, then appends it after the compact key (a new line, then that snippet in quotes).
+- Optional: **first_answer_tail** (string) — if set, the server applies the same first-word / 5-character rule for the quoted tail (use when choice objects are incomplete).
 - Use this schema (all keys lowercase); **q** is the **printed** question number when visible (example 37), otherwise 1-based order among unnumbered items:
 {"total_questions":NUMBER,"first_answer_tail":"","answers":[{"q":37,"question":"STEM","choices":[{"label":"A","text":"..."},{"label":"B","text":"..."},{"label":"C","text":"..."},{"label":"D","text":"..."}],"a":"A"}, ...]}
 - Include a choices array for every question when options are legible; each item must have label (A–D or A–E) and text (the option wording). If the question is skipped (a equals S), choices may be an empty array [] or best-effort partial text—do not invent fake options.
