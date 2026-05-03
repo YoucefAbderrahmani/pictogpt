@@ -58,10 +58,10 @@ const QCM_TAIL_GAP = '\n';
 /** Compact QCM key only, e.g. `1A-2B-3S` or `37A-38B`. */
 const COMPACT_QCM_BODY = /^(\d{1,6}[ABCDES])(-\d{1,6}[ABCDES])*$/i;
 
-/** Extract compact key from SMS body (`q)___stem\\ncompact`, optional legacy stem, quoted tails, or plain compact). */
+/** Extract compact key from SMS body (`q)stem …\\ncompact`, optional legacy `q)___…`, quoted tails, or plain compact). */
 function extractQcmCompactFromSmsBody(smsBody: string): string | null {
   const t = String(smsBody || '').trim();
-  const stemBlock = /^(\d{1,6}\)___[^\r\n]*)\r?\n(((?:\d{1,6}[ABCDES])(?:-\d{1,6}[ABCDES])*))\s*$/i.exec(t);
+  const stemBlock = /^(\d{1,6}\)[^\r\n]*)\r?\n(((?:\d{1,6}[ABCDES])(?:-\d{1,6}[ABCDES])*))\s*$/i.exec(t);
   if (stemBlock) {
     const c = stemBlock[2].replace(/\s+/g, '');
     return COMPACT_QCM_BODY.test(c) ? c : null;
@@ -165,7 +165,7 @@ Compact answer key (required meaning of your choices):
 
 Output rules:
 - Return a single JSON object only. No markdown, no code fences, no commentary before or after.
-- Each answer must include **question** (the stem text as printed on the sheet). The server builds the SMS body as **two lines with no double quotes**: line 1 is **printed q** then **)** then **___** (three underscores) then the **first 14 characters** of the **lowest-q** question’s stem, then **...** (ellipsis); line 2 is the compact key (e.g. **37A-38B-39S**).
+- Each answer must include **question** (the stem text as printed on the sheet). The server builds the SMS body as **two lines with no double quotes**: line 1 is **printed q** then **)** then the **first 11 characters** of the **lowest-q** question’s stem, then a **space** and **...** (three dots); there is **no** `___` separator. Line 2 is the compact key (e.g. **37A-38B-39S**).
 - For every non-skipped answer, each **choices** item must include accurate **text** (full option wording as printed).
 - Use this schema (all keys lowercase); **q** is the **printed** question number when visible (example 37), otherwise 1-based order among unnumbered items:
 {"total_questions":NUMBER,"answers":[{"q":37,"question":"STEM","choices":[{"label":"A","text":"..."},{"label":"B","text":"..."},{"label":"C","text":"..."},{"label":"D","text":"..."}],"a":"A"}, ...]}
@@ -226,13 +226,13 @@ function compactQcmPayloadSansSlotPrefix(s: string): string | null {
   return extractQcmCompactFromSmsBody(t) ? t : null;
 }
 
-/** Payload after `N)__`: `q)___stem\\ncompact`, legacy quoted tails, legacy quoted-stem formats, or plain compact. */
+/** Payload after `N)__`: `q)stem …\\ncompact`, legacy quoted tails, legacy quoted-stem formats, or plain compact. */
 function parseAnswerKeyRest(rest: string): { display: string } | null {
   const restTrim = rest.trim();
   if (!restTrim || /\bskipped\b/i.test(restTrim)) return null;
   const collapsed = restTrim.replace(/\s+/g, '');
 
-  const stemFirst = /^((\d{1,6})\)___[^\r\n]*)\r?\n(((?:\d{1,6}[ABCDES])(?:-\d{1,6}[ABCDES])*))\s*$/i.exec(restTrim);
+  const stemFirst = /^((\d{1,6})\)[^\r\n]*)\r?\n(((?:\d{1,6}[ABCDES])(?:-\d{1,6}[ABCDES])*))\s*$/i.exec(restTrim);
   if (stemFirst) {
     const compact = stemFirst[3].replace(/\s+/g, '');
     if (!COMPACT_QCM_BODY.test(compact)) return null;
