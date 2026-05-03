@@ -1,9 +1,35 @@
 {
   "version": 2,
+  "functions": {
+    "api/analyze.js": {
+      "maxDuration": 120
+    },
+    "api/admin.js": {
+      "maxDuration": 30
+    },
+    "api/shared-logs.js": {
+      "maxDuration": 30
+    },
+    "api/network-config.js": {
+      "maxDuration": 30
+    }
+  },
   "routes": [
     {
       "src": "/v1/analyze",
       "dest": "/api/analyze"
+    },
+    {
+      "src": "/v1/admin",
+      "dest": "/api/admin"
+    },
+    {
+      "src": "/v1/shared-logs",
+      "dest": "/api/shared-logs"
+    },
+    {
+      "src": "/v1/network-config",
+      "dest": "/api/network-config"
     },
     {
       "src": "/health",

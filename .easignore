@@ -1,0 +1,3 @@
+# Keep EAS upload small (avoid shipping previous APKs / local artifacts)
+*.apk
+*.aab

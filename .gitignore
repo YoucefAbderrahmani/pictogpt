@@ -34,6 +34,7 @@ yarn-error.*
 .env*.local
 .env
 server/.env
+server/.service-account.json
 
 # typescript
 *.tsbuildinfo
@@ -43,3 +44,7 @@ server/.env
 /android
 
 .vercel
+
+# Local build artifacts (large)
+*.apk
+*.aab

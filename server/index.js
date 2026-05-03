@@ -1,6 +1,20 @@
 import cors from 'cors';
 import express from 'express';
-import sharp from 'sharp';
+import { tryDocumentAiPreprocess } from './documentAi.js';
+import {
+  appendSharedLog,
+  bumpLobbyResetNonce,
+  clearSharedLogs,
+  getLobbyResetNonce,
+  getNetworkSettings,
+  getSuspended,
+  kvIsConfigured,
+  listSharedLogs,
+  setNetworkSettings,
+  setSuspended,
+} from '../lib/sharedStore.js';
+import { openRouterModelCandidates } from '../lib/openRouterModelCandidates.js';
+import { toQcmSmsFormat } from '../lib/qcmSmsFormat.js';
 
 const app = express();
 const PORT = Number(process.env.PORT) || 8787;
@@ -18,6 +32,24 @@ function collectApiKeyChain(envBaseName) {
     if (typeof v === 'string' && v.trim()) keys.push(v.trim());
   }
   return keys;
+}
+
+/** Gemini keys from `GEMINI_API_KEY` plus Google’s usual names (same `_2`…`_4` suffixes per name). */
+function collectGeminiApiKeyChain() {
+  const seen = new Set();
+  const out = [];
+  for (const base of [
+    'GEMINI_API_KEY',
+    'GOOGLE_GENERATIVE_AI_API_KEY',
+    'GOOGLE_AI_API_KEY',
+  ]) {
+    for (const k of collectApiKeyChain(base)) {
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out.push(k);
+    }
+  }
+  return out;
 }
 
 /** Common paste typo: `k-or-v1-...` → `sk-or-v1-...` */
@@ -39,74 +71,60 @@ function auth(req) {
   return token === expected;
 }
 
-function qcmAnswersFromParsed(parsed) {
-  const raw =
-    parsed?.answers ??
-    parsed?.ANSWERS ??
-    (Array.isArray(parsed) ? parsed : null);
-  return Array.isArray(raw) ? raw : [];
-}
-
-function toQcmSmsFormat(rawText) {
-  const raw = String(rawText || '');
-  const jsonMatch = raw.match(/\{[\s\S]*\}/);
-  if (jsonMatch) {
-    try {
-      const parsed = JSON.parse(jsonMatch[0]);
-      const answers = qcmAnswersFromParsed(parsed);
-      const normalized = answers
-        .map((entry) => ({
-          q: Number(entry?.q ?? entry?.Q),
-          a: String(entry?.a ?? entry?.A ?? '').toUpperCase(),
-        }))
-        .filter(
-          (x) => Number.isFinite(x.q) && x.q >= 1 && x.q <= 999999 && /^[ABCDES]$/.test(x.a)
-        );
-      const byQ = new Map();
-      for (const x of normalized) {
-        byQ.set(x.q, x.a);
-      }
-      const deduped = [...byQ.entries()].sort((a, b) => a[0] - b[0]);
-      if (deduped.length > 0) {
-        return deduped.map(([q, a]) => `${q}${a}`).join('-');
-      }
-    } catch {
-      // fall back to regex parsing
-    }
-  }
-  const text = raw.toUpperCase();
-  const pairs = [...text.matchAll(/(?:^|[^0-9])(\d{1,6})\s*[:.)-]?\s*([ABCDES])(?:[^A-Z]|$)/g)];
-  if (pairs.length === 0) {
-    return '';
-  }
-  const byQuestion = new Map();
-  for (const m of pairs) {
-    const q = Number(m[1]);
-    if (!Number.isFinite(q)) continue;
-    byQuestion.set(q, m[2]);
-  }
-  const ordered = [...byQuestion.entries()].sort((a, b) => a[0] - b[0]);
-  return ordered.map(([q, ans]) => `${q}${ans}`).join('-');
-}
-
 const DEFAULT_PROMPT =
   'Describe what you see in this image clearly and concisely. The reply will be sent by SMS, so be direct and avoid markdown.';
 
+function isVercelServerless() {
+  return Boolean(process.env.VERCEL);
+}
+
 function ocrEnhanceEnabled() {
-  const raw = (process.env.OCR_IMAGE_ENHANCE || 'true').toLowerCase().trim();
+  const onVercel = isVercelServerless();
+  const def = onVercel ? 'false' : 'true';
+  const raw = (process.env.OCR_IMAGE_ENHANCE ?? def).toLowerCase().trim();
   return !['0', 'false', 'off', 'no'].includes(raw);
 }
 
+async function ensureUploadWithinLimits(imageBase64, mimeType) {
+  if (typeof imageBase64 !== 'string') {
+    return { imageBase64, mimeType };
+  }
+  if (!isVercelServerless()) {
+    if (imageBase64.length <= 2_800_000) return { imageBase64, mimeType };
+  } else if (imageBase64.length <= 95_000) {
+    return { imageBase64, mimeType };
+  }
+  try {
+    const { default: sharp } = await import('sharp');
+    const buf = Buffer.from(imageBase64, 'base64');
+    const maxEdge = isVercelServerless() ? 1024 : 1800;
+    const out = await sharp(buf, { sequentialRead: true, limitInputPixels: 18_000_000 })
+      .rotate()
+      .resize(maxEdge, maxEdge, { fit: 'inside', withoutEnlargement: true })
+      .jpeg({ quality: isVercelServerless() ? 66 : 78 })
+      .toBuffer();
+    return { imageBase64: out.toString('base64'), mimeType: 'image/jpeg' };
+  } catch {
+    return { imageBase64, mimeType };
+  }
+}
+
 async function enhanceImageForOcr(imageBase64) {
+  const { default: sharp } = await import('sharp');
   const input = Buffer.from(imageBase64, 'base64');
-  const output = await sharp(input)
-    .grayscale()
-    .normalize()
-    .sharpen({ sigma: 1.2 })
-    .png({ compressionLevel: 9 })
-    .toBuffer();
+  const maxEdge = isVercelServerless() ? 1024 : 1800;
+  let pipeline = sharp(input, { sequentialRead: true, limitInputPixels: 18_000_000 })
+    .rotate()
+    .resize(maxEdge, maxEdge, { fit: 'inside', withoutEnlargement: true })
+    .grayscale();
+  if (isVercelServerless()) {
+    pipeline = pipeline.jpeg({ quality: 72 });
+  } else {
+    pipeline = pipeline.normalize().sharpen({ sigma: 1 }).jpeg({ quality: 80 });
+  }
+  const output = await pipeline.toBuffer();
   return {
-    mime: 'image/png',
+    mime: 'image/jpeg',
     imageBase64: output.toString('base64'),
   };
 }
@@ -120,13 +138,23 @@ function envIntInRange(name, defaultVal, min, max) {
   return Math.min(max, Math.max(min, Math.floor(n)));
 }
 
-const OPENROUTER_MODEL_CANDIDATES = ['openai/gpt-4o', 'openai/gpt-4o-mini'];
+/** Prefer current GA / stable IDs first (older names often 404 on new keys). */
 const GEMINI_MODEL_CANDIDATES = [
+  'gemini-2.5-flash',
+  'gemini-flash-latest',
+  'gemini-2.5-flash-lite',
   'gemini-2.0-flash',
   'gemini-2.0-flash-lite',
   'gemini-1.5-flash',
   'gemini-1.5-flash-8b',
 ];
+/** DeepSeek chat API (OpenAI-style multimodal when supported). See https://api-docs.deepseek.com */
+const DEEPSEEK_MODEL_CANDIDATES = ['deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-chat'];
+
+function deepSeekChatCompletionsUrl() {
+  const base = (process.env.DEEPSEEK_API_BASE_URL || 'https://api.deepseek.com').trim().replace(/\/+$/, '');
+  return `${base}/chat/completions`;
+}
 
 function isOpenRouterTokenBudgetError(message) {
   const m = String(message || '').toLowerCase();
@@ -148,8 +176,10 @@ function openRouterMessageContent(json) {
 async function analyzeWithOpenRouter({ key, userPrompt, dataUrl }) {
   const cap = envIntInRange('OPENROUTER_MAX_TOKENS', 1024, 256, 4096);
   const failures = [];
+  const models = openRouterModelCandidates();
+  console.log('[server] OpenRouter model chain:', models.join(' → '));
 
-  for (const model of OPENROUTER_MODEL_CANDIDATES) {
+  for (const model of models) {
     let maxTokens = cap;
     while (maxTokens >= 256) {
       const openRouterRes = await fetch('https://openrouter.ai/api/v1/chat/completions', {
@@ -176,7 +206,9 @@ async function analyzeWithOpenRouter({ key, userPrompt, dataUrl }) {
       const json = await openRouterRes.json().catch(() => ({}));
       if (openRouterRes.ok) {
         const content = openRouterMessageContent(json);
-        if (content) return content;
+        if (content) {
+          return { content, answerModel: `openrouter/${model}`.toLowerCase() };
+        }
         failures.push(`${model}@${maxTokens}: empty model response`);
         break;
       }
@@ -194,13 +226,90 @@ async function analyzeWithOpenRouter({ key, userPrompt, dataUrl }) {
   throw new Error(failures.join(' | '));
 }
 
+async function analyzeWithDeepSeek({ key, userPrompt, dataUrl }) {
+  const cap = envIntInRange('DEEPSEEK_MAX_TOKENS', 2048, 256, 8192);
+  const url = deepSeekChatCompletionsUrl();
+  const failures = [];
+
+  for (const model of DEEPSEEK_MODEL_CANDIDATES) {
+    let maxTokens = cap;
+    while (maxTokens >= 256) {
+      const payload = {
+        model,
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: userPrompt },
+              { type: 'image_url', image_url: { url: dataUrl } },
+            ],
+          },
+        ],
+        max_tokens: maxTokens,
+      };
+      if (String(model).startsWith('deepseek-v4')) {
+        payload.thinking = { type: 'disabled' };
+      }
+      const dsRes = await fetch(url, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${key}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
+
+      const json = await dsRes.json().catch(() => ({}));
+      if (dsRes.ok) {
+        const content = openRouterMessageContent(json);
+        if (content) {
+          return { content, answerModel: `deepseek/${model}`.toLowerCase() };
+        }
+        failures.push(`${model}@${maxTokens}: empty model response`);
+        break;
+      }
+
+      const msg = json?.error?.message || `DeepSeek error (${dsRes.status})`;
+      if (isOpenRouterTokenBudgetError(msg) && maxTokens > 256) {
+        maxTokens = Math.max(256, Math.floor(maxTokens / 2));
+        continue;
+      }
+      failures.push(`${model}@${maxTokens}: ${msg}`);
+      break;
+    }
+  }
+
+  throw new Error(failures.join(' | '));
+}
+
 function isGeminiQuotaOrRateError(message) {
   const m = String(message || '').toLowerCase();
   return /quota|resource_exhausted|rate limit|429|too many requests/i.test(m);
 }
 
+function extractGeminiGenerateContentText(json) {
+  const cands = Array.isArray(json?.candidates) ? json.candidates : [];
+  const chunks = [];
+  for (const c of cands) {
+    const parts = c?.content?.parts;
+    if (!Array.isArray(parts)) continue;
+    for (const p of parts) {
+      if (typeof p?.text === 'string') chunks.push(p.text);
+    }
+  }
+  const text = chunks.join('').trim();
+  if (text) return { text, diag: null };
+  const c0 = cands[0];
+  const bits = [];
+  if (c0?.finishReason) bits.push(`finishReason=${c0.finishReason}`);
+  if (json?.promptFeedback?.blockReason) bits.push(`promptBlock=${json.promptFeedback.blockReason}`);
+  const brm = json?.promptFeedback?.blockReasonMessage;
+  if (typeof brm === 'string' && brm.trim()) bits.push(brm.trim().slice(0, 160));
+  return { text: '', diag: bits.length ? bits.join('; ') : 'no text in response (safety or empty candidates)' };
+}
+
 async function analyzeWithGemini({ key, userPrompt, mime, imageBase64 }) {
-  const cap = envIntInRange('GEMINI_MAX_OUTPUT_TOKENS', 1024, 256, 8192);
+  const cap = envIntInRange('GEMINI_MAX_OUTPUT_TOKENS', 2048, 256, 8192);
   const failures = [];
 
   for (const model of GEMINI_MODEL_CANDIDATES) {
@@ -249,17 +358,11 @@ async function analyzeWithGemini({ key, userPrompt, mime, imageBase64 }) {
         break;
       }
 
-      const parts = json?.candidates?.[0]?.content?.parts;
-      const content = Array.isArray(parts)
-        ? parts
-            .map((p) => (typeof p?.text === 'string' ? p.text : ''))
-            .join('-')
-            .trim()
-        : '';
+      const { text: content, diag } = extractGeminiGenerateContentText(json);
       if (content) {
-        return content;
+        return { content, answerModel: `gemini/${model}`.toLowerCase() };
       }
-      failures.push(`${model}@${maxOutputTokens}: empty or blocked response`);
+      failures.push(`${model}@${maxOutputTokens}: ${diag || 'empty response'}`);
       break;
     }
   }
@@ -275,11 +378,12 @@ app.post('/v1/analyze', async (req, res) => {
   const openRouterKeys = collectApiKeyChain('OPENROUTER_API_KEY')
     .map(normalizeOpenRouterApiKey)
     .filter(Boolean);
-  const geminiKeys = collectApiKeyChain('GEMINI_API_KEY');
-  if (openRouterKeys.length === 0 && geminiKeys.length === 0) {
+  const geminiKeys = collectGeminiApiKeyChain();
+  const deepseekKeys = collectApiKeyChain('DEEPSEEK_API_KEY');
+  if (openRouterKeys.length === 0 && geminiKeys.length === 0 && deepseekKeys.length === 0) {
     res.status(500).json({
       error:
-        'Server missing API keys: set OPENROUTER_API_KEY and/or GEMINI_API_KEY (optional _2, _3, _4 for extra fallbacks per provider)',
+        'Server missing API keys: set OPENROUTER_API_KEY, GEMINI_API_KEY (or GOOGLE_GENERATIVE_AI_API_KEY / GOOGLE_AI_API_KEY), and/or DEEPSEEK_API_KEY (optional _2, _3, _4 per provider)',
     });
     return;
   }
@@ -291,78 +395,374 @@ app.post('/v1/analyze', async (req, res) => {
     return;
   }
 
-  const { toPhoneNumber, imageBase64, mimeType, prompt, qcmMode } = req.body || {};
-  if (!toPhoneNumber || typeof toPhoneNumber !== 'string') {
-    res.status(400).json({ error: 'toPhoneNumber is required' });
-    return;
-  }
+  const { toPhoneNumber, imageBase64, mimeType, prompt, qcmMode, photoSlot, clientTag } = req.body || {};
   if (!imageBase64 || typeof imageBase64 !== 'string') {
     res.status(400).json({ error: 'imageBase64 is required' });
     return;
   }
   const mime = typeof mimeType === 'string' && mimeType.startsWith('image/') ? mimeType : 'image/jpeg';
   const userPrompt = typeof prompt === 'string' && prompt.trim() ? prompt.trim() : DEFAULT_PROMPT;
+
+  try {
+    if (await getSuspended()) {
+      res.status(503).json({
+        error: 'API is temporarily suspended by the administrator. Try again later.',
+        suspended: true,
+      });
+      return;
+    }
+  } catch (e) {
+    console.error('[POST /v1/analyze] suspend check', e);
+  }
+
+  try {
   let processedMime = mime;
   let processedBase64 = imageBase64;
-  if (ocrEnhanceEnabled()) {
+  try {
+    const capped = await ensureUploadWithinLimits(processedBase64, processedMime);
+    processedBase64 = capped.imageBase64;
+    processedMime = capped.mimeType;
+  } catch {
+    // keep original
+  }
+  /** @type {'google_document_ai'|'server_enhanced'|'original'} */
+  let imagePreparation = 'original';
+  try {
+    const deskewed = await tryDocumentAiPreprocess(processedBase64, processedMime);
+    if (deskewed?.imageBase64) {
+      processedBase64 = deskewed.imageBase64;
+      processedMime = deskewed.mimeType;
+      imagePreparation = 'google_document_ai';
+    }
+  } catch {
+    // keep original if Document AI throws
+  }
+  if (isVercelServerless() && typeof processedBase64 === 'string' && processedBase64.length > 320_000) {
     try {
-      const enhanced = await enhanceImageForOcr(imageBase64);
+      const again = await ensureUploadWithinLimits(processedBase64, processedMime);
+      processedBase64 = again.imageBase64;
+      processedMime = again.mimeType;
+    } catch {
+      // keep
+    }
+  }
+  if (ocrEnhanceEnabled() && imagePreparation !== 'google_document_ai') {
+    try {
+      const enhanced = await enhanceImageForOcr(processedBase64);
       processedMime = enhanced.mime;
       processedBase64 = enhanced.imageBase64;
+      imagePreparation = 'server_enhanced';
     } catch {
-      // keep original image if enhancement fails
+      // keep current image if enhancement fails
     }
   }
   const dataUrl = `data:${processedMime};base64,${processedBase64}`;
   try {
-    let content = '';
+    const needsValidQcm = Boolean(qcmMode);
+    let textOut = '';
+    let smsBody = '';
+    let answerModel = '';
     const attemptErrors = [];
 
-    for (let i = 0; i < openRouterKeys.length; i += 1) {
+    /** @param {{ content: string; answerModel: string }} r */
+    function acceptModelResult(r) {
+      if (!r || r.content == null) return false;
+      const raw = typeof r.content === 'string' ? r.content : String(r.content ?? '');
+      if (!raw.trim()) return false;
+      const body = needsValidQcm ? toQcmSmsFormat(raw) || '' : raw.trim();
+      if (!body) return false;
+      textOut = raw;
+      smsBody = body;
+      answerModel = r.answerModel || '';
+      return true;
+    }
+
+    const qcmHint = needsValidQcm ? 'empty or unparseable QCM' : 'empty response';
+
+    for (let i = 0; i < geminiKeys.length; i += 1) {
       try {
-        content = await analyzeWithOpenRouter({ key: openRouterKeys[i], userPrompt, dataUrl });
-        if (content) break;
-        attemptErrors.push(`OpenRouter key #${i + 1}: empty response`);
+        const r = await analyzeWithGemini({
+          key: geminiKeys[i],
+          userPrompt,
+          mime: processedMime,
+          imageBase64: processedBase64,
+        });
+        if (acceptModelResult(r)) break;
+        attemptErrors.push(`Gemini key #${i + 1}: ${qcmHint}`);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        attemptErrors.push(`OpenRouter key #${i + 1}: ${msg}`);
+        attemptErrors.push(`Gemini key #${i + 1}: ${msg}`);
       }
     }
 
-    if (!content) {
-      for (let i = 0; i < geminiKeys.length; i += 1) {
+    if (!smsBody) {
+      for (let i = 0; i < openRouterKeys.length; i += 1) {
         try {
-          content = await analyzeWithGemini({
-            key: geminiKeys[i],
-            userPrompt,
-            mime: processedMime,
-            imageBase64: processedBase64,
-          });
-          if (content) break;
-          attemptErrors.push(`Gemini key #${i + 1}: empty response`);
+          const r = await analyzeWithOpenRouter({ key: openRouterKeys[i], userPrompt, dataUrl });
+          if (acceptModelResult(r)) break;
+          attemptErrors.push(`OpenRouter key #${i + 1}: ${qcmHint}`);
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
-          attemptErrors.push(`Gemini key #${i + 1}: ${msg}`);
+          attemptErrors.push(`OpenRouter key #${i + 1}: ${msg}`);
         }
       }
     }
 
-    if (!content) {
+    if (!smsBody) {
+      for (let i = 0; i < deepseekKeys.length; i += 1) {
+        try {
+          const r = await analyzeWithDeepSeek({ key: deepseekKeys[i], userPrompt, dataUrl });
+          if (acceptModelResult(r)) break;
+          attemptErrors.push(`DeepSeek key #${i + 1}: ${qcmHint}`);
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          attemptErrors.push(`DeepSeek key #${i + 1}: ${msg}`);
+        }
+      }
+    }
+
+    if (!smsBody) {
       res.status(502).json({
         error: `All API keys failed (${attemptErrors.length} attempt(s)): ${attemptErrors.join(' | ')}`,
       });
       return;
     }
-
-    const smsBody = qcmMode ? toQcmSmsFormat(content) : content.trim();
-    if (!smsBody) {
-      res.status(502).json({ error: 'Could not parse QCM answers from model response' });
-      return;
+    try {
+      const digits = String(toPhoneNumber || '').replace(/\D/g, '');
+      const tagRaw = typeof clientTag === 'string' ? clientTag.trim().slice(0, 80) : '';
+      const safeTag = /^[a-zA-Z0-9_.-]+$/.test(tagRaw) ? tagRaw : null;
+      await appendSharedLog({
+        body: smsBody,
+        slot: typeof photoSlot === 'number' && Number.isFinite(photoSlot) ? photoSlot : null,
+        qcmMode: Boolean(qcmMode),
+        phoneTail: digits.length >= 4 ? digits.slice(-4) : null,
+        clientTag: safeTag,
+        answerModel: answerModel || null,
+      });
+    } catch (e) {
+      console.error('[POST /v1/analyze] appendSharedLog', e);
     }
-    res.json({ text: content.trim(), smsBody });
+    res.json({
+      text: textOut.trim(),
+      smsBody,
+      imagePreparation,
+      answerModel: answerModel || undefined,
+    });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
-    res.status(500).json({ error: message });
+    console.error('[POST /v1/analyze]', message);
+    if (!res.headersSent) {
+      res.status(500).json({ error: message || 'Internal server error' });
+    }
+  }
+  } catch (fatal) {
+    const message = fatal instanceof Error ? fatal.message : String(fatal);
+    console.error('[POST /v1/analyze] fatal', message);
+    if (!res.headersSent) {
+      res.status(500).json({ error: message || 'Image pipeline failed' });
+    }
+  }
+});
+
+app.post('/v1/shared-logs', async (req, res) => {
+  if (!auth(req)) {
+    res.status(401).json({
+      error:
+        'Invalid or missing bearer token. In the app, set App secret to the same value as CLIENT_BEARER_TOKEN on the server, or remove/clear CLIENT_BEARER_TOKEN on the server to disable auth.',
+    });
+    return;
+  }
+  try {
+    const limit = Number(req.body?.limit);
+    const logs = await listSharedLogs(Number.isFinite(limit) ? limit : 200);
+    res.json({ logs, kvConfigured: kvIsConfigured() });
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    console.error('[POST /v1/shared-logs]', message);
+    res.status(500).json({ error: message || 'Internal server error' });
+  }
+});
+
+app.post('/v1/network-config', async (req, res) => {
+  if (!auth(req)) {
+    res.status(401).json({
+      error:
+        'Invalid or missing bearer token. In the app, set App secret to the same value as CLIENT_BEARER_TOKEN on the server, or remove/clear CLIENT_BEARER_TOKEN on the server to disable auth.',
+    });
+    return;
+  }
+  try {
+    const raw = await getNetworkSettings();
+    const settings =
+      raw && typeof raw === 'object'
+        ? {
+            backendUrl: raw.backendUrl || '',
+            bearerToken: raw.bearerToken || '',
+            phones: Array.isArray(raw.phones) ? raw.phones : ['', '', '', ''],
+            updatedAt: raw.updatedAt,
+          }
+        : null;
+    const lobbyResetNonce = await getLobbyResetNonce();
+    res.json({ ok: true, settings, kvConfigured: kvIsConfigured(), lobbyResetNonce });
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    console.error('[POST /v1/network-config]', message);
+    res.status(500).json({ error: message || 'Internal server error' });
+  }
+});
+
+app.post('/v1/admin', async (req, res) => {
+  if (!auth(req)) {
+    res.status(401).json({
+      error:
+        'Invalid or missing bearer token. In the app, set App secret to the same value as CLIENT_BEARER_TOKEN on the server, or remove/clear CLIENT_BEARER_TOKEN on the server to disable auth.',
+    });
+    return;
+  }
+  const body = req.body || {};
+  const adminPass = (process.env.ADMIN_PANEL_PASSWORD || '').trim();
+  if (!adminPass) {
+    res.status(501).json({
+      error:
+        'Admin is not configured: set ADMIN_PANEL_PASSWORD on the server (same value you enter in the app).',
+    });
+    return;
+  }
+  const sent = typeof body.adminPassword === 'string' ? body.adminPassword : '';
+  if (sent !== adminPass) {
+    res.status(403).json({ error: 'Invalid admin password.' });
+    return;
+  }
+  const action = typeof body.action === 'string' ? body.action.trim().toLowerCase() : '';
+  try {
+    if (action === 'status') {
+      const suspended = await getSuspended();
+      const lobbyResetNonce = await getLobbyResetNonce();
+      res.json({
+        suspended,
+        kvConfigured: kvIsConfigured(),
+        lobbyResetNonce,
+        suspendEnvFallback: String(process.env.SUSPEND_ALL_REQUESTS || '')
+          .trim()
+          .toLowerCase()
+          .split(',')
+          .includes('true'),
+      });
+      return;
+    }
+    if (action === 'suspend') {
+      if (!kvIsConfigured()) {
+        res.status(409).json({
+          error:
+            'Cannot toggle suspend from the app without Redis/KV. Set KV_REST_API_URL and KV_REST_API_TOKEN, or set SUSPEND_ALL_REQUESTS=true on the server and redeploy.',
+        });
+        return;
+      }
+      const ok = await setSuspended(true);
+      if (!ok) {
+        res.status(500).json({ error: 'Could not write suspend flag to KV.' });
+        return;
+      }
+      res.json({ ok: true, suspended: true });
+      return;
+    }
+    if (action === 'resume') {
+      if (!kvIsConfigured()) {
+        res.status(409).json({
+          error:
+            'Cannot toggle suspend without KV. Set KV_REST_API_URL and KV_REST_API_TOKEN, or unset SUSPEND_ALL_REQUESTS and redeploy.',
+        });
+        return;
+      }
+      const ok = await setSuspended(false);
+      if (!ok) {
+        res.status(500).json({ error: 'Could not clear suspend flag in KV.' });
+        return;
+      }
+      res.json({ ok: true, suspended: false });
+      return;
+    }
+    if (action === 'shared_logs' || action === 'list_shared_logs') {
+      const limit = Number(body.limit);
+      const logs = await listSharedLogs(Number.isFinite(limit) ? limit : 200);
+      res.json({ logs, kvConfigured: kvIsConfigured() });
+      return;
+    }
+    if (action === 'clear_shared_logs') {
+      const ok = await clearSharedLogs();
+      if (!ok) {
+        res.status(409).json({
+          error: 'Cannot clear shared logs without KV (KV_REST_API_URL / KV_REST_API_TOKEN).',
+        });
+        return;
+      }
+      res.json({ ok: true });
+      return;
+    }
+    if (action === 'reset_lobby') {
+      if (!kvIsConfigured()) {
+        res.status(409).json({
+          error: 'Cannot reset lobby without KV (KV_REST_API_URL / KV_REST_API_TOKEN).',
+        });
+        return;
+      }
+      const cleared = await clearSharedLogs();
+      if (!cleared) {
+        res.status(500).json({ error: 'Could not clear shared logs.' });
+        return;
+      }
+      const lobbyResetNonce = await bumpLobbyResetNonce();
+      if (lobbyResetNonce == null) {
+        res.status(500).json({ error: 'Could not update lobby reset marker.' });
+        return;
+      }
+      res.json({ ok: true, lobbyResetNonce });
+      return;
+    }
+    if (action === 'get_network_settings') {
+      if (!kvIsConfigured()) {
+        res.json({ ok: true, settings: null, kvConfigured: false });
+        return;
+      }
+      const settings = await getNetworkSettings();
+      res.json({ ok: true, settings, kvConfigured: true });
+      return;
+    }
+    if (action === 'save_network_settings') {
+      if (!kvIsConfigured()) {
+        res.status(409).json({
+          error:
+            'Cannot save network settings without Redis/KV. Set KV_REST_API_URL and KV_REST_API_TOKEN (or UPSTASH_REDIS_REST_*).',
+        });
+        return;
+      }
+      const net = body.network;
+      if (net == null || typeof net !== 'object') {
+        res.status(400).json({ error: 'Body must include network: { backendUrl, bearerToken, phones }.' });
+        return;
+      }
+      const ok = await setNetworkSettings({
+        backendUrl: net.backendUrl,
+        bearerToken: net.bearerToken,
+        phones: net.phones,
+      });
+      if (!ok) {
+        res.status(500).json({ error: 'Could not write network settings to KV.' });
+        return;
+      }
+      res.json({ ok: true });
+      return;
+    }
+    res.status(400).json({
+      error:
+        'Unknown action. Use: status, suspend, resume, shared_logs, clear_shared_logs, reset_lobby, get_network_settings, save_network_settings.',
+    });
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    console.error('[POST /v1/admin]', message);
+    if (!res.headersSent) {
+      res.status(500).json({ error: message || 'Internal server error' });
+    }
   }
 });
 

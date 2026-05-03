@@ -1,0 +1,13 @@
+diff --git a/node_modules/expo-camera/ios/Current/CameraView.swift b/node_modules/expo-camera/ios/Current/CameraView.swift
+index b2e7f9e..daf31a6 100644
+--- a/node_modules/expo-camera/ios/Current/CameraView.swift
++++ b/node_modules/expo-camera/ios/Current/CameraView.swift
+@@ -171,7 +171,7 @@ public class CameraView: ExpoView, EXAppLifecycleListener, EXCameraInterface, Ca
+ 
+   private func setupPreview() {
+     previewLayer = AVCaptureVideoPreviewLayer(session: sessionManager.session)
+-    previewLayer.videoGravity = .resizeAspectFill
++    previewLayer.videoGravity = .resizeAspect
+     previewLayer.needsDisplayOnBoundsChange = true
+   }
+ 

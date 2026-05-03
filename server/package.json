@@ -4,13 +4,17 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "start:local": "node --env-file=.env index.js"
   },
   "engines": {
     "node": ">=20"
   },
   "dependencies": {
+    "@vercel/kv": "^3.0.0",
     "cors": "^2.8.5",
-    "express": "^4.21.2"
+    "express": "^4.21.2",
+    "google-auth-library": "^10.6.2",
+    "sharp": "^0.34.5"
   }
 }

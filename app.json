@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "PictureToSMS",
-    "slug": "PictureToSMS",
+    "name": "Pictoxam",
+    "slug": "pictoxam",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -19,6 +19,14 @@
         "expo-camera",
         {
           "cameraPermission": "Allow $(PRODUCT_NAME) to use the camera to capture multiple exam pages."
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/icon.png",
+          "color": "#22c55e",
+          "defaultChannel": "pictoxam-answers"
         }
       ],
       "expo-secure-store"
@@ -47,7 +55,10 @@
         "android.permission.SEND_SMS",
         "android.permission.READ_PHONE_STATE",
         "android.permission.INTERNET",
-        "android.permission.RECORD_AUDIO"
+        "android.permission.RECORD_AUDIO",
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.POST_NOTIFICATIONS"
       ],
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false
@@ -57,9 +68,9 @@
     },
     "extra": {
       "eas": {
-        "projectId": "6002d51d-b645-4e40-b1f8-b0f0be22a7e3"
+        "projectId": "040a4b26-22db-46f3-acd6-ed0a5342863d"
       }
     },
-    "owner": "vadaa"
+    "owner": "vadvoood"
   }
 }

@@ -9,9 +9,65 @@ PICTURE TO SMS — BACKEND + APK
    - Add environment variables in Vercel project settings:
        OPENROUTER_API_KEY = primary OpenRouter key
        OPENROUTER_API_KEY_2, _3, _4 = optional extra OpenRouter keys (tried in order if the previous fails)
-       GEMINI_API_KEY = primary Gemini key (used after all OpenRouter keys are exhausted)
+       OPENROUTER_MODEL = single OpenRouter model id (optional; overrides the default chain below)
+       OPENROUTER_MODELS = comma-separated list, tried in order (if set, OPENROUTER_MODEL is ignored)
+       Example — only flagship: OPENROUTER_MODEL=google/gemini-2.5-pro
+       Fallback chain: OPENROUTER_MODELS=google/gemini-2.5-pro,google/gemini-2.5-flash
+       Browse ids: https://openrouter.ai/models
+       If you omit both, the server defaults to Gemini on OpenRouter first (flash → pro → gpt-4o-mini), not GPT-4o.
+       After changing env on Vercel: redeploy (or “Redeploy” from the latest deployment) so functions pick up new vars.
+       Vercel → Project → Settings → Environment Variables: enable for Production (and Preview if you use preview URLs).
+       Note: the server tries Google Gemini (direct API) before OpenRouter when GEMINI_API_KEY is set.
+       To actually use OpenRouter for vision, remove or unset GEMINI_API_KEY in that environment (keep only OPENROUTER_API_KEY).
+       GEMINI_API_KEY = primary Gemini key (tried first; then OpenRouter, then DeepSeek if set)
        GEMINI_API_KEY_2, _3, _4 = optional extra Gemini keys (same order)
        CLIENT_BEARER_TOKEN = any long random secret (recommended)
+
+   Optional — Google Document AI (server-side “document scanner” quality for burst camera photos)
+   The phone stays on fast burst capture; each /v1/analyze call can run Document AI first (deskewed page
+   image when the processor returns it), then OpenRouter/Gemini. Not the ML Kit on-phone UI — same GCP family.
+
+   A) In Google Cloud Console (one-time)
+   - Pick or create a project. Note the Project ID (not only the display name).
+   - APIs & Services → Enable APIs → enable “Cloud Document AI API”.
+   - IAM & Admin → Service Accounts → Create account (e.g. picturetosms-docai) → Create key → JSON.
+   - Open JSON in an editor; you need client_email and private_key in that file.
+   - Document AI → Processors → Create processor → type: Enterprise Document OCR → Region: e.g. United States
+     (must match DOCUMENT_AI_LOCATION below, usually us). After creation, open the processor and copy its ID
+     (long hex string from the resource name or URL).
+
+   B) Grant the service account access to Document AI
+   - IAM → Grant access → add the service account email → role: “Document AI API User” (roles/documentai.apiUser).
+
+   C) Add these environment variables (Vercel / Railway / server .env)
+
+       Local template: edit server/.env (gitignored), then from the server folder run npm run start:local
+       so Node loads it (--env-file). Copy the same variable names into Vercel.
+
+       DOCUMENT_AI_PROJECT_ID = same as GCP project id
+       DOCUMENT_AI_LOCATION = us   (or eu, etc. — must match where you created the processor)
+       DOCUMENT_AI_PROCESSOR_ID = the processor id from the console (hex string)
+
+       Provide credentials in ONE of these ways:
+       GOOGLE_SERVICE_ACCOUNT_JSON = entire JSON file as ONE line (minify: remove line breaks inside the file, or use jq: jq -c . service-account.json on Mac/Linux)
+       OR
+       GOOGLE_SERVICE_ACCOUNT_JSON_BASE64 = base64 of the raw JSON file bytes (easier in Vercel UI on Windows:
+         PowerShell: [Convert]::ToBase64String([IO.File]::ReadAllBytes("C:\path\service-account.json")) )
+
+       DOCUMENT_AI_ENABLED = true   (optional; omit to use Document AI whenever the vars above + credentials are set.
+         Set to false to disable without deleting secrets.)
+
+       Optional aliases: GOOGLE_CLOUD_PROJECT or GCP_PROJECT can be used instead of DOCUMENT_AI_PROJECT_ID if you prefer.
+
+   D) Redeploy the API (Vercel deploy or Railway redeploy) so the new env vars load.
+
+   Processor types: "Enterprise Document OCR" returns a deskewed raster in pages[].image (best for this app).
+   A "Custom Extractor" mainly returns entities/text; if pages[].image is empty, the server skips Document AI for
+   that request and uses the burst photo + sharp as before. Fix: add a second processor (Enterprise Document OCR)
+   and point DOCUMENT_AI_PROCESSOR_ID at it, or deploy a processor version and set DOCUMENT_AI_PROCESSOR_VERSION.
+
+   If anything is wrong, the server logs [Document AI] and falls back to the normal image + OCR_IMAGE_ENHANCE.
+
    - Deploy, then copy the public HTTPS URL (e.g. https://pictogpt.vercel.app).
    - The app endpoint is already mapped:
        POST /v1/analyze -> /api/analyze
@@ -23,8 +79,11 @@ PICTURE TO SMS — BACKEND + APK
    - Build uses server/Dockerfile automatically when Dockerfile is present.
    - Variables (service -> Variables):
        OPENROUTER_API_KEY (and optional OPENROUTER_API_KEY_2, _3, _4)
+       Optional: OPENROUTER_MODEL or OPENROUTER_MODELS (same as Vercel list above)
        GEMINI_API_KEY (and optional GEMINI_API_KEY_2, _3, _4)
        CLIENT_BEARER_TOKEN = any long random secret (recommended)
+       Same Document AI variables as in Option A if you use server-side deskew (GOOGLE_SERVICE_ACCOUNT_JSON or
+       GOOGLE_SERVICE_ACCOUNT_JSON_BASE64, DOCUMENT_AI_PROJECT_ID, DOCUMENT_AI_LOCATION, DOCUMENT_AI_PROCESSOR_ID)
    - Deploy, then copy the public HTTPS URL (e.g. https://something.up.railway.app).
 
    Option C — run on your PC for testing only
