@@ -14,7 +14,8 @@ PICTURE TO SMS — BACKEND + APK
        Example — only flagship: OPENROUTER_MODEL=google/gemini-2.5-pro
        Fallback chain: OPENROUTER_MODELS=google/gemini-2.5-pro,google/gemini-2.5-flash
        Browse ids: https://openrouter.ai/models
-       If you omit both, the server defaults to Gemini on OpenRouter first (flash → pro → gpt-4o-mini), not GPT-4o.
+       If you omit both, the server defaults to Gemini 2.5 Flash on OpenRouter, then gpt-4o-mini if Flash fails.
+       Direct Google Gemini (when GEMINI_API_KEY is set) already tries gemini-2.5-flash first, then other flash IDs.
        After changing env on Vercel: redeploy (or “Redeploy” from the latest deployment) so functions pick up new vars.
        Vercel → Project → Settings → Environment Variables: enable for Production (and Preview if you use preview URLs).
        Note: the server tries Google Gemini (direct API) before OpenRouter when GEMINI_API_KEY is set.
