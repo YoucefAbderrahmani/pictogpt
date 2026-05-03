@@ -27,6 +27,7 @@ import {
   presentAnswerNotification,
   requestAnswerNotificationPermission,
 } from './lib/answerNotifications';
+import { findQcmCompactConflict } from './lib/qcmConflict';
 import { mergeQcmSmsBodyWithTailFromModel, MIN_QCM_PAIRS_ACCEPT } from './lib/qcmSmsFormat.js';
 
 type QueuedImage = {
@@ -153,6 +154,8 @@ How to find questions and assign **q** (question number):
 - **If the sheet prints a question number** next to or in the heading for that item (e.g. 37, Q5, “Question 12”), use that integer as **q**. Keep multi-page logic: do **not** renumber real printed numbers (e.g. 37, 38, 39 stay 37, 38, 39).
 - **If a question has no printed number**, assign **q** from **reading order on this page/image only**: the first question you identify is **q=1**, the next is **q=2**, then **3**, and so on. When printed numbers resume later, switch back to printed values for those items.
 - Stems may appear **above or below** the options, or options may be listed first (“reversed” layout). Use layout and grouping to decide which options belong to which stem—do not split one question across two **q** values.
+- **French “QCM / Exemple de questions” style (and similar):** a section title may repeat for each block. The stem often starts with a bullet (•) or dash; **choices are numbered 1. 2. 3. 4. 5.** (or 1) 2) …). Those numbers are **choice indices**, not question numbers. Map the **first** numbered line under that stem to label **A**, the second to **B**, … the fifth to **E** in your JSON **choices** array. If the **same** stem+options block appears twice as two separate visual blocks, treat them as **two questions** in order (**q** increases) unless it is clearly one question accidentally duplicated by the camera—use two **q** values when in doubt.
+- **Never** use a choice-line number (1–5) as **q**; **q** is always the question index as above.
 
 How to find answers and normalize to **A B C D** (and **E** if needed):
 - In JSON, every choice must use **label** A, B, C, D (and E only if a fifth option clearly exists on the sheet).
@@ -162,6 +165,7 @@ How to find answers and normalize to **A B C D** (and **E** if needed):
 
 Choosing **a** (the selected answer) and compact key:
 - For each question pick exactly one of A/B/C/D/E that you would mark, or **S** if you must skip (illegible or ambiguous—do not guess A–E). Skipped items use **q** plus **S** in the compact string (e.g. **37S**).
+- In JSON, **a** must always be a single letter **A–E** or **S** (never a raw digit), even when the printed sheet uses 1–5 for options—the compact line uses letters only.
 - **Compact key (required):** sort **answers** by **q** ascending, then concatenate **q** immediately followed by **a** for each row, joined by **-** with no spaces. Examples: **1A-2B-3C**, **37A-38B-39S**. This is the only compact encoding.
 
 Image quality:
@@ -171,9 +175,26 @@ Output rules:
 - Return a single JSON object only. No markdown, no code fences, no commentary before or after.
 - Each answer object must include **question** (stem as printed). The server builds a two-line SMS (no ASCII double quotes): line 1 = **q** + **)** + first **11** characters of the **lowest-q** question stem + space + three dots; line 2 = the compact key only.
 - For every non-skipped answer, each **choices** item needs accurate **text** (full wording as printed).
-- Schema (keys lowercase):
-{"total_questions":NUMBER,"answers":[{"q":37,"question":"STEM","choices":[{"label":"A","text":"..."},{"label":"B","text":"..."},{"label":"C","text":"..."},{"label":"D","text":"..."}],"a":"A"}, ...]}
+- Schema (keys lowercase); include a fifth choice when the sheet has five options:
+{"total_questions":NUMBER,"answers":[{"q":37,"question":"STEM","choices":[{"label":"A","text":"..."},{"label":"B","text":"..."},{"label":"C","text":"..."},{"label":"D","text":"..."},{"label":"E","text":"..."}],"a":"A"}, ...]}
 - Include **choices** when legible; skipped questions may use [] or partial choices. **total_questions** equals **answers** length. **q** positive integers, no duplicates. **a** is A/B/C/D/E or **S**.`;
+
+function buildQcmConflictVerifyPrompt(
+  compactNew: string,
+  compactPrior: string,
+  baseQcmInstructions: string
+): string {
+  return `${baseQcmInstructions}
+
+---
+
+CONFLICT RESOLUTION (mandatory): Two readings of this same page disagree for at least one question number that appears in both compact keys.
+
+Your first-pass compact would be: ${compactNew}
+Conflicting reference compact (from an earlier send, batch, or team lobby): ${compactPrior}
+
+Re-read the image from scratch. For every question number present in **either** compact above, output exactly one best letter A–E (or S only if truly illegible) based only on the image — do not copy either compact blindly. Merge into a single JSON object using the exact same schema and output rules as above (answers with q, question, choices, a; total_questions). Include every such question number. No markdown fences, no text outside the JSON.`;
+}
 
 function getBackendCandidates(raw: string): string[] {
   const base = raw.trim().replace(/\/+$/, '');
@@ -1516,6 +1537,9 @@ export default function App() {
     const recipients = allValidDestinations(merged.phones);
     const smsDispatchAllowed = merged.smsSendingEnabled !== false;
     let canSendSms = smsDispatchAllowed && recipients.length > 0;
+    let historyCompacts: string[] = [];
+    let lobbyCompacts: string[] = [];
+    const batchQcmCompacts: string[] = [];
 
     try {
       if (recipients.length > 0 && smsDispatchAllowed) {
@@ -1528,6 +1552,29 @@ export default function App() {
         }
       } else if (recipients.length > 0 && !smsDispatchAllowed) {
         setStatus('SMS sending is disabled in admin (server). Analysis still runs; outbound SMS skipped.');
+      }
+
+      if (qcmMode) {
+        const historyRows = await readAnswerHistory();
+        historyCompacts = Array.from(
+          new Set(
+            historyRows
+              .filter((r) => r.kind === 'sent')
+              .map((r) => extractQcmCompactFromSmsBody(r.body))
+              .filter((c): c is string => Boolean(c))
+              .map((c) => c.replace(/\s+/g, '').toUpperCase())
+          )
+        );
+        lobbyCompacts = Array.from(
+          new Set(
+            teamSharedLogs
+              .map((row) =>
+                extractQcmCompactFromSmsBody(typeof row.body === 'string' ? row.body : '')
+              )
+              .filter((c): c is string => Boolean(c))
+              .map((c) => c.replace(/\s+/g, '').toUpperCase())
+          )
+        );
       }
 
       while (pending.length > 0) {
@@ -1556,14 +1603,61 @@ export default function App() {
           if (!rawCore) {
             throw new Error('No parseable content returned from model');
           }
-          const smsBody = qcmMode
+          let smsBody = qcmMode
             ? mergeQcmSmsBodyWithTailFromModel(rawCore, backendResult.text ?? '')
             : rawCore;
-          const answerModel = normalizeAnswerModel(backendResult.answerModel);
+          let answerModel = normalizeAnswerModel(backendResult.answerModel);
 
           imagePrepLines.push(
             describeImagePreparation(slot, backendResult.imagePreparation)
           );
+
+          if (qcmMode && merged.backendUrl) {
+            const compact0 = extractQcmCompactFromSmsBody(smsBody);
+            const priorCompacts = [...batchQcmCompacts, ...historyCompacts, ...lobbyCompacts];
+            const conflictPeer =
+              compact0 && findQcmCompactConflict(compact0, priorCompacts);
+            if (conflictPeer) {
+              setStatus(`Conflicting QCM vs earlier answers; re-verifying page ${slot}…`);
+              try {
+                const verifyPrompt = buildQcmConflictVerifyPrompt(
+                  compact0,
+                  conflictPeer,
+                  effectivePrompt
+                );
+                const v = await callBackendAnalyze(
+                  merged.backendUrl,
+                  merged.bearerToken || null,
+                  analyzeContact,
+                  base64,
+                  mimeType,
+                  verifyPrompt,
+                  qcmMode,
+                  slot,
+                  deviceTag.trim() || null
+                );
+                const rawV =
+                  typeof v.smsBody === 'string' && v.smsBody.trim() !== ''
+                    ? v.smsBody.trim()
+                    : (v.text ?? '').trim();
+                if (rawV) {
+                  const smsV = mergeQcmSmsBodyWithTailFromModel(rawV, v.text ?? '');
+                  if (looksLikeValidatedQcmCompact(smsV)) {
+                    smsBody = smsV;
+                    const am = normalizeAnswerModel(v.answerModel);
+                    if (am) answerModel = am;
+                    imagePrepLines.push(
+                      `Photo ${slot}: resolved QCM conflict (${compact0} vs ${conflictPeer}) via second pass.`
+                    );
+                  }
+                }
+              } catch {
+                imagePrepLines.push(
+                  `Photo ${slot}: QCM conflict re-check failed; kept first pass.`
+                );
+              }
+            }
+          }
 
           const answerKey = normalizeAnswerForDedupe(smsBody);
           if (seenAnswerNorm.has(answerKey)) {
@@ -1603,6 +1697,8 @@ export default function App() {
               body: smsBody,
             });
             void presentAnswerNotification(smsBody, slot);
+            const fc = extractQcmCompactFromSmsBody(smsBody);
+            if (fc) batchQcmCompacts.push(fc.replace(/\s+/g, '').toUpperCase());
           }
         } catch (e) {
           const message = e instanceof Error ? e.message : String(e);
@@ -1676,6 +1772,7 @@ export default function App() {
     teamFeedUnlocked,
     smsSendingEnabled,
     refreshTeamSharedLogs,
+    teamSharedLogs,
   ]);
 
   const finishCamera = useCallback(
