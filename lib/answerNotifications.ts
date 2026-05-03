@@ -1,5 +1,6 @@
 import { Platform } from 'react-native';
 import * as Notifications from 'expo-notifications';
+import { isValidQcmCompactLine, qcmLeadingCompact } from './qcmSmsFormat.js';
 
 const ANDROID_CHANNEL_ID = 'pictoxam-answers';
 
@@ -52,23 +53,33 @@ export async function requestAnswerNotificationPermission(): Promise<boolean> {
   }
 }
 
-function formatAnswerNotificationBody(body: string, slot?: number | null): string {
-  const raw = String(body || '')
-    .replace(/\s+/g, ' ')
+/** Outbound SMS uses `N)__payload`; notifications use `N)payload` (no `__`) and never duplicate that prefix. */
+function stripLeadingSmsSlotPrefix(body: string): string {
+  return String(body || '')
+    .trim()
+    .replace(/^\d{1,6}\)__\s*/i, '')
     .trim();
-  if (!raw) return '';
-  /** SMS-style payload already has `N)__…`. */
-  if (/^\d{1,6}\)__/.test(raw)) return raw;
-  if (typeof slot === 'number' && Number.isFinite(slot) && slot >= 1) {
-    /** QCM / display lines often start with `N)stem…` (not `N)__`). Do not prepend `N)__` again — that produced `1)__1)…` in notifications. */
-    const alreadySlotLead = new RegExp(`^${slot}\\)(?!__)`);
-    if (alreadySlotLead.test(raw)) return raw;
-    return `${slot})__${raw}`;
-  }
-  return raw;
 }
 
-/** Heads-up style local alert: body starts with N)__ like SMS when slot is known. */
+function formatAnswerNotificationBody(body: string, slot?: number | null): string {
+  let t = String(body || '').trim();
+  t = stripLeadingSmsSlotPrefix(t);
+  if (!t) return '';
+
+  const compact = qcmLeadingCompact(t);
+  const compactOnly = compact && isValidQcmCompactLine(compact) ? compact : null;
+
+  if (typeof slot === 'number' && Number.isFinite(slot) && slot >= 1) {
+    if (compactOnly) return `${slot})${compactOnly}`;
+    const oneLine = t.replace(/\s+/g, ' ').trim();
+    return `${slot})${oneLine}`;
+  }
+
+  if (compactOnly) return compactOnly;
+  return t.replace(/\s+/g, ' ').trim();
+}
+
+/** Heads-up local alert: `N)compact` or `N)one line` (no `N)__` SMS transport prefix). */
 export async function presentAnswerNotification(body: string, slot?: number | null): Promise<void> {
   if (Platform.OS === 'web') return;
   const text = formatAnswerNotificationBody(body, slot).slice(0, 500);

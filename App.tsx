@@ -28,7 +28,11 @@ import {
   requestAnswerNotificationPermission,
 } from './lib/answerNotifications';
 import { findQcmCompactConflict } from './lib/qcmConflict';
-import { mergeQcmSmsBodyWithTailFromModel, MIN_QCM_PAIRS_ACCEPT } from './lib/qcmSmsFormat.js';
+import {
+  isValidQcmCompactLine,
+  mergeQcmSmsBodyWithTailFromModel,
+  MIN_QCM_PAIRS_ACCEPT,
+} from './lib/qcmSmsFormat.js';
 
 type QueuedImage = {
   id: string;
@@ -55,48 +59,38 @@ const SHARED_LOBBY_POLL_MS = 8000;
 /** Shared lobby unlock: same threshold as server `MIN_QCM_PAIRS_ACCEPT` in lib/qcmSmsFormat.js. */
 /** Legacy QCM lines: newline before a quoted tail after the compact key. */
 const QCM_TAIL_GAP = '\n';
-/** Compact QCM key only, e.g. `1A-2B-3S` or `37A-38B`. */
-const COMPACT_QCM_BODY = /^(\d{1,6}[ABCDES])(-\d{1,6}[ABCDES])*$/i;
-
 /** Extract compact key from SMS body (`q)stem …\\ncompact`, optional legacy `q)___…`, quoted tails, or plain compact). */
 function extractQcmCompactFromSmsBody(smsBody: string): string | null {
   const t = String(smsBody || '').trim();
-  const stemBlock = /^(\d{1,6}\)[^\r\n]*)\r?\n(((?:\d{1,6}[ABCDES])(?:-\d{1,6}[ABCDES])*))\s*$/i.exec(t);
+  const stemBlock = /^(\d{1,6}\)[^\r\n]*)\r?\n([^\r\n]+)\s*$/i.exec(t);
   if (stemBlock) {
     const c = stemBlock[2].replace(/\s+/g, '');
-    return COMPACT_QCM_BODY.test(c) ? c : null;
+    return isValidQcmCompactLine(c) ? c : null;
   }
   const legacy = /^"[^"]*"\s*__+\s*(.+)$/i.exec(t);
   if (legacy) {
     const c = legacy[1].trim().replace(/\s+/g, '');
-    return COMPACT_QCM_BODY.test(c) ? c : null;
+    return isValidQcmCompactLine(c) ? c : null;
   }
   const collapsed = t.replace(/\s+/g, '');
-  const neu = /^"[^"]*"\s*((\d{1,6}[ABCDES])(-\d{1,6}[ABCDES])*)$/i.exec(collapsed);
+  const neu = /^"[^"]*"\s*(.+)$/i.exec(collapsed);
   if (neu) {
     const c = neu[1];
-    return COMPACT_QCM_BODY.test(c) ? c : null;
+    if (isValidQcmCompactLine(c)) return c;
   }
   let idx = t.search(/\r?\n\s*"/);
   if (idx < 0) idx = t.search(/\s{3,}"/);
   if (idx >= 0) {
     const head = t.slice(0, idx).trim().replace(/\s+/g, '');
-    return COMPACT_QCM_BODY.test(head) ? head : null;
+    return isValidQcmCompactLine(head) ? head : null;
   }
   const plain = t.replace(/\s+/g, '');
-  return COMPACT_QCM_BODY.test(plain) ? plain : null;
+  return isValidQcmCompactLine(plain) ? plain : null;
 }
 
 function looksLikeValidatedQcmCompact(smsBody: string): boolean {
   const compact = extractQcmCompactFromSmsBody(smsBody);
-  if (!compact) return false;
-  const parts = compact
-    .split('-')
-    .map((p) => p.trim().toUpperCase())
-    .filter(Boolean);
-  if (parts.length < MIN_QCM_PAIRS_ACCEPT) return false;
-  const segment = /^\d{1,6}[ABCDES]$/;
-  return parts.every((p) => segment.test(p));
+  return Boolean(compact && isValidQcmCompactLine(compact));
 }
 
 /** First skipped analyze line in status bar (OpenRouter errors can be long). */
@@ -147,7 +141,7 @@ function allValidDestinations(slots: string[]): string[] {
 
 const DEFAULT_PROMPT =
   'Describe what you see in this image clearly and concisely. Keep the reply short and plain text (no markdown).';
-const QCM_PROMPT = `You are reading a multiple-choice exam (QCM) from the attached image. Your job is to OCR, **detect each question and its answer options**, and output **one unified JSON format** so the compact key is always like **1A-2B-3C** (question number + letter, sorted by question number).
+const QCM_PROMPT = `You are reading a multiple-choice exam (QCM) from the attached image. Your job is to OCR, **detect each question and its answer options**, and output **one unified JSON format** so the compact key is like **1A-2BC-3S** (question number + chosen letter(s), or **S** for skip; sort by **q** ascending).
 
 How to find questions and assign **q** (question number):
 - Read top-to-bottom, left-to-right (or follow clear columns). Each **question** is a stem plus the set of choices that belong to it (same visual group: spacing, indentation, box, or column).
@@ -157,16 +151,21 @@ How to find questions and assign **q** (question number):
 - **French “QCM / Exemple de questions” style (and similar):** a section title may repeat for each block. The stem often starts with a bullet (•) or dash; **choices are numbered 1. 2. 3. 4. 5.** (or 1) 2) …). Those numbers are **choice indices**, not question numbers. Map the **first** numbered line under that stem to label **A**, the second to **B**, … the fifth to **E** in your JSON **choices** array. If the **same** stem+options block appears twice as two separate visual blocks, treat them as **two questions** in order (**q** increases) unless it is clearly one question accidentally duplicated by the camera—use two **q** values when in doubt.
 - **Never** use a choice-line number (1–5) as **q**; **q** is always the question index as above.
 
-How to find answers and normalize to **A B C D** (and **E** if needed):
-- In JSON, every choice must use **label** A, B, C, D (and E only if a fifth option clearly exists on the sheet).
-- **If the sheet already labels options A/B/C/D** (or a/b/c/d), keep that mapping: label A = first letter option, etc.
-- **If options are not lettered** (numbered lines like 1- / 2-, (1) (2), bullets *, dashes -, roman numerals, etc.), **enumerate in reading order** within that question: **1st option → A**, **2nd → B**, **3rd → C**, **4th → D**, **5th → E**. Do **not** treat option prefixes (1-, 2-, *) as question numbers—those are almost always **choices** under the current stem.
+**Horizontal checkbox grids (official correction keys, bilingual FR/AR sheets, concours-style rows):**
+- Each printed question is one **q** (use the number printed on the sheet when visible).
+- Under that question, options are often **square checkboxes in one or more horizontal rows**. Assign letters by **geometry**, not by Arabic/English reading direction of the text inside each box: scan **left → right** on the **top** row of boxes for that question (**A**, **B**, **C**, …); then go to the **next row down** under the **same** question and continue the alphabet (**D**, **E**, …) again **left → right**. So: **top row LTR**, then **next row LTR**, until every box for that question is labelled **A–Z** as needed (rare sheets exceed **Z**—then use **AA**, **AB** only if unavoidable; prefer at most **Z** per question).
+- **Checkmarks (✓), ticks, or filled boxes** mark the correct answer(s). If **only one** box is checked, **a** is that single letter. If **several** boxes are checked (official multi-answer), **a** must be **all** checked letters **sorted** (e.g. **"AC"**); compact uses one segment **2AC** (no hyphen inside the segment).
+
+How to find answers and normalize to **A B C D … Z**:
+- In JSON, each choice uses **label** **A**, **B**, **C**, … in the same order you assigned above (add **D**, **E**, …, **Z** as needed for how many boxes exist for that question).
+- **If the sheet already prints letters** on options, keep those as **label** values but still list **choices** in **left-to-right, top-to-bottom** visual order so **A** is the leftmost-top box for that question.
+- **If options are not lettered** (numbered lines 1. 2. 3., bullets, etc.), **enumerate in reading order** within that question: first line **A–…**, next line continues the alphabet—same rule as horizontal rows.
 - Store each choice **text** as the real wording (you may strip leading markers like “1-” or “*” from the stored text unless they are clearly part of the printed sentence).
 
 Choosing **a** (the selected answer) and compact key:
-- For each question pick exactly one of A/B/C/D/E that you would mark, or **S** if you must skip (illegible or ambiguous—do not guess A–E). Skipped items use **q** plus **S** in the compact string (e.g. **37S**).
-- In JSON, **a** must always be a single letter **A–E** or **S** (never a raw digit), even when the printed sheet uses 1–5 for options—the compact line uses letters only.
-- **Compact key (required):** sort **answers** by **q** ascending, then concatenate **q** immediately followed by **a** for each row, joined by **-** with no spaces. Examples: **1A-2B-3C**, **37A-38B-39S**. This is the only compact encoding.
+- For each question: **S** if illegible; otherwise one or more letters **A–Z** (every checked box), sorted (e.g. **AC**). Skipped questions use segment **qS** (e.g. **37S**).
+- In JSON, **a** is a string of sorted letters or **S** (not raw digits); digits **1–5** only when mapping numbered lists to **A–E** as above.
+- **Compact key (required):** sort **answers** by **q** ascending; for each row concatenate **q** + **a** (**a** = **S** or a string like **AC** with no separator between letters), join segments with **-**. Examples: **1A-2BC-3C**, **37A-38B-39S**.
 
 Image quality:
 - If blur, crop, glare, or resolution prevents reading a question or its options reliably, use **S** for that **q** instead of inventing letters.
@@ -175,9 +174,9 @@ Output rules:
 - Return a single JSON object only. No markdown, no code fences, no commentary before or after.
 - Each answer object must include **question** (stem as printed). The server builds a two-line SMS (no ASCII double quotes): line 1 = **q** + **)** + first **11** characters of the **lowest-q** question stem + space + three dots; line 2 = the compact key only.
 - For every non-skipped answer, each **choices** item needs accurate **text** (full wording as printed).
-- Schema (keys lowercase); include a fifth choice when the sheet has five options:
-{"total_questions":NUMBER,"answers":[{"q":37,"question":"STEM","choices":[{"label":"A","text":"..."},{"label":"B","text":"..."},{"label":"C","text":"..."},{"label":"D","text":"..."},{"label":"E","text":"..."}],"a":"A"}, ...]}
-- Include **choices** when legible; skipped questions may use [] or partial choices. **total_questions** equals **answers** length. **q** positive integers, no duplicates. **a** is A/B/C/D/E or **S**.`;
+- Schema (keys lowercase); add as many **choices** entries as there are boxes (labels **A** … **Z** in visual order):
+{"total_questions":NUMBER,"answers":[{"q":2,"question":"STEM","choices":[{"label":"A","text":"..."},{"label":"B","text":"..."},{"label":"C","text":"..."}],"a":"AC"}, ...]}
+- Include **choices** when legible; skipped questions may use [] or partial choices. **total_questions** equals **answers** length. **q** positive integers, no duplicates. **a** is **S** or a non-empty string of sorted letters **A–Z** (no **S** inside multi-select strings).`;
 
 function buildQcmConflictVerifyPrompt(
   compactNew: string,
@@ -193,7 +192,7 @@ CONFLICT RESOLUTION (mandatory): Two readings of this same page disagree for at 
 Your first-pass compact would be: ${compactNew}
 Conflicting reference compact (from an earlier send, batch, or team lobby): ${compactPrior}
 
-Re-read the image from scratch. For every question number present in **either** compact above, output exactly one best letter A–E (or S only if truly illegible) based only on the image — do not copy either compact blindly. Merge into a single JSON object using the exact same schema and output rules as above (answers with q, question, choices, a; total_questions). Include every such question number. No markdown fences, no text outside the JSON.`;
+Re-read the image from scratch. For every question number present in **either** compact above, output the best **a** string (sorted letters A–Z for every checked box, or **S** if illegible) based only on the image — do not copy either compact blindly. Merge into a single JSON object using the exact same schema and output rules as above (answers with q, question, choices, a; total_questions). Include every such question number. No markdown fences, no text outside the JSON.`;
 }
 
 function getBackendCandidates(raw: string): string[] {
@@ -256,37 +255,41 @@ function parseAnswerKeyRest(rest: string): { display: string } | null {
   if (!restTrim || /\bskipped\b/i.test(restTrim)) return null;
   const collapsed = restTrim.replace(/\s+/g, '');
 
-  const stemFirst = /^((\d{1,6})\)[^\r\n]*)\r?\n(((?:\d{1,6}[ABCDES])(?:-\d{1,6}[ABCDES])*))\s*$/i.exec(restTrim);
+  const stemFirst = /^((\d{1,6})\)[^\r\n]*)\r?\n([^\r\n]+)\s*$/i.exec(restTrim);
   if (stemFirst) {
     const compact = stemFirst[3].replace(/\s+/g, '');
-    if (!COMPACT_QCM_BODY.test(compact)) return null;
+    if (!isValidQcmCompactLine(compact)) return null;
     return { display: `${stemFirst[1]}\n${compact}` };
   }
 
   const legacy = /^"([^"]*)"\s*__+\s*(.+)$/i.exec(restTrim);
   if (legacy) {
     const compact = legacy[2].trim().replace(/\s+/g, '');
-    if (!COMPACT_QCM_BODY.test(compact)) return null;
+    if (!isValidQcmCompactLine(compact)) return null;
     return { display: compact };
   }
 
-  const neu = /^"([^"]*)"\s*((?:\d{1,6}[ABCDES])(?:-\d{1,6}[ABCDES])*)$/i.exec(collapsed);
+  const neu = /^"([^"]*)"\s*(.+)$/i.exec(collapsed);
   if (neu) {
     const compact = neu[2];
-    if (!COMPACT_QCM_BODY.test(compact)) return null;
+    if (!isValidQcmCompactLine(compact)) return null;
     return { display: compact };
   }
 
-  const withTailNl = /^((?:\d{1,6}[ABCDES])(?:-\d{1,6}[ABCDES])*)\s*\r?\n\s*("[^"]*")\s*$/i.exec(restTrim);
+  const withTailNl = /^([^\r\n]+)\s*\r?\n\s*("[^"]*")\s*$/i.exec(restTrim);
   if (withTailNl) {
-    return { display: `${withTailNl[1]}${QCM_TAIL_GAP}${withTailNl[2]}` };
+    const compact = withTailNl[1].replace(/\s+/g, '');
+    if (!isValidQcmCompactLine(compact)) return null;
+    return { display: `${compact}${QCM_TAIL_GAP}${withTailNl[2]}` };
   }
-  const withTail = /^((?:\d{1,6}[ABCDES])(?:-\d{1,6}[ABCDES])*)\s{3,}("[^"]*")\s*$/i.exec(restTrim);
+  const withTail = /^([^\r\n]+)\s{3,}("[^"]*")\s*$/i.exec(restTrim);
   if (withTail) {
-    return { display: `${withTail[1]}${QCM_TAIL_GAP}${withTail[2]}` };
+    const compact = withTail[1].replace(/\s+/g, '');
+    if (!isValidQcmCompactLine(compact)) return null;
+    return { display: `${compact}${QCM_TAIL_GAP}${withTail[2]}` };
   }
 
-  if (COMPACT_QCM_BODY.test(collapsed)) {
+  if (isValidQcmCompactLine(collapsed)) {
     return { display: collapsed };
   }
   return null;

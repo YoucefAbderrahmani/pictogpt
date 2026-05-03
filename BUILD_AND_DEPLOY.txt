@@ -12,7 +12,7 @@ PICTURE TO SMS — BACKEND + APK
        OPENROUTER_MODEL = single OpenRouter model id (optional; overrides the default chain below)
        OPENROUTER_MODELS = comma-separated list, tried in order (if set, OPENROUTER_MODEL is ignored)
        Example — only flagship: OPENROUTER_MODEL=google/gemini-2.5-pro
-       Fallback chain: OPENROUTER_MODELS=google/gemini-2.5-pro,google/gemini-2.5-flash
+       Fallback chain example: OPENROUTER_MODELS=google/gemini-3-flash-preview,google/gemini-2.5-pro,google/gemini-2.5-flash
        Browse ids: https://openrouter.ai/models
        If you omit both, the server defaults to an OpenRouter chain: Google Gemini ids first (`google/gemini-*`), then other vision models. Quota/rate/404 skips to the next model in the list.
        After changing env on Vercel: redeploy (or “Redeploy” from the latest deployment) so functions pick up new vars.

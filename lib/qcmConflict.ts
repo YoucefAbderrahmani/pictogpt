@@ -1,4 +1,4 @@
-/** Parse `1A-2B-3S` into question → letter (uppercase). */
+/** Parse `1A-2BC-3S` into question → letters or `S` (uppercase, sorted for multi). */
 export function parseQcmCompactToMap(compact: string): Map<number, string> | null {
   const t = String(compact || '')
     .trim()
@@ -9,11 +9,14 @@ export function parseQcmCompactToMap(compact: string): Map<number, string> | nul
   if (parts.length === 0) return null;
   const map = new Map<number, string>();
   for (const p of parts) {
-    const m = /^(\d{1,6})([ABCDES])$/.exec(p);
+    const m = /^(\d{1,6})([A-Z]+)$/i.exec(p);
     if (!m) return null;
     const q = Number(m[1]);
+    const tail = m[2].toUpperCase();
     if (!Number.isFinite(q) || q < 1) return null;
-    map.set(q, m[2]);
+    if (tail === 'S') map.set(q, 'S');
+    else if (tail.includes('S')) return null;
+    else map.set(q, [...new Set(tail.split(''))].sort().join(''));
   }
   return map;
 }
