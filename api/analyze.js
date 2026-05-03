@@ -1,3 +1,4 @@
+import { geminiModelCandidates, isGeminiSwitchModelError } from '../lib/geminiModelCandidates.js';
 import { openRouterModelCandidates } from '../lib/openRouterModelCandidates.js';
 import { toQcmSmsFormat } from '../lib/qcmSmsFormat.js';
 
@@ -66,16 +67,6 @@ function envIntInRange(name, defaultVal, min, max) {
   return Math.min(max, Math.max(min, Math.floor(n)));
 }
 
-/** Prefer current GA / stable IDs first (older names often 404 on new keys). */
-const GEMINI_MODEL_CANDIDATES = [
-  'gemini-2.5-flash',
-  'gemini-flash-latest',
-  'gemini-2.5-flash-lite',
-  'gemini-2.0-flash',
-  'gemini-2.0-flash-lite',
-  'gemini-1.5-flash',
-  'gemini-1.5-flash-8b',
-];
 const DEEPSEEK_MODEL_CANDIDATES = ['deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-chat'];
 
 function deepSeekChatCompletionsUrl() {
@@ -274,11 +265,6 @@ async function analyzeWithDeepSeek({ key, userPrompt, dataUrl }) {
   throw new Error(failures.join(' | '));
 }
 
-function isGeminiQuotaOrRateError(message) {
-  const m = String(message || '').toLowerCase();
-  return /quota|resource_exhausted|rate limit|429|too many requests/i.test(m);
-}
-
 /** Concatenate all text parts from all candidates; join parts with '' (not '-') to preserve JSON. */
 function extractGeminiGenerateContentText(json) {
   const cands = Array.isArray(json?.candidates) ? json.candidates : [];
@@ -305,8 +291,12 @@ function extractGeminiGenerateContentText(json) {
 async function analyzeWithGemini({ key, userPrompt, mime, imageBase64 }) {
   const cap = envIntInRange('GEMINI_MAX_OUTPUT_TOKENS', 2048, 256, 8192);
   const failures = [];
+  const geminiModels = geminiModelCandidates();
+  if (process.env.NODE_ENV !== 'test') {
+    console.log('[api/analyze] Gemini model chain:', geminiModels.join(' → '));
+  }
 
-  for (const model of GEMINI_MODEL_CANDIDATES) {
+  for (const model of geminiModels) {
     let maxOutputTokens = cap;
     while (maxOutputTokens >= 256) {
       const body = JSON.stringify({
@@ -344,7 +334,15 @@ async function analyzeWithGemini({ key, userPrompt, mime, imageBase64 }) {
       const json = await geminiRes.json().catch(() => ({}));
       if (!geminiRes.ok) {
         const msg = json?.error?.message || `HTTP ${geminiRes.status}`;
-        if (isGeminiQuotaOrRateError(msg) && maxOutputTokens > 256) {
+        if (isGeminiSwitchModelError(msg, geminiRes.status, json?.error)) {
+          failures.push(`${model}@${maxOutputTokens}: ${String(msg).slice(0, 280)}`);
+          break;
+        }
+        const mLow = String(msg).toLowerCase();
+        if (
+          maxOutputTokens > 256 &&
+          /maxoutput|max.?output|token count|length|too long|invalid argument/i.test(mLow)
+        ) {
           maxOutputTokens = Math.max(256, Math.floor(maxOutputTokens / 2));
           continue;
         }
