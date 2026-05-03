@@ -57,8 +57,12 @@ function formatAnswerNotificationBody(body: string, slot?: number | null): strin
     .replace(/\s+/g, ' ')
     .trim();
   if (!raw) return '';
+  /** SMS-style payload already has `N)__…`. */
   if (/^\d{1,6}\)__/.test(raw)) return raw;
   if (typeof slot === 'number' && Number.isFinite(slot) && slot >= 1) {
+    /** QCM / display lines often start with `N)stem…` (not `N)__`). Do not prepend `N)__` again — that produced `1)__1)…` in notifications. */
+    const alreadySlotLead = new RegExp(`^${slot}\\)(?!__)`);
+    if (alreadySlotLead.test(raw)) return raw;
     return `${slot})__${raw}`;
   }
   return raw;

@@ -5,7 +5,7 @@ import {
   openRouterOutboundHeaders,
   readOpenRouterApiResponseBody,
 } from '../lib/openRouterModelCandidates.js';
-import { toQcmSmsFormat } from '../lib/qcmSmsFormat.js';
+import { MIN_QCM_PAIRS_ACCEPT, toQcmSmsFormat } from '../lib/qcmSmsFormat.js';
 
 const DEFAULT_PROMPT =
   'Describe what you see in this image clearly and concisely. The reply will be sent by SMS, so be direct and avoid markdown.';
@@ -341,7 +341,7 @@ export default async function handler(req, res) {
     if (!smsBody) {
       const errOut =
         `All OpenRouter keys failed (${attemptErrors.length} attempt(s)): ${attemptErrors.join(' | ')}` +
-        ' — Check OPENROUTER_API_KEY and credits at openrouter.ai. Default model chain tries `google/gemini-*` first, then other providers; set OPENROUTER_MODELS to customize. QCM mode needs at least 3 parsed questions (JSON or 1A-2B-style).';
+        ` — Check OPENROUTER_API_KEY and credits at openrouter.ai. Default model chain tries \`google/gemini-*\` first, then other providers; set OPENROUTER_MODELS to customize. QCM mode needs at least ${MIN_QCM_PAIRS_ACCEPT} parsed question(s) (JSON or 1A-2B-style).`;
       res.status(502).json({ error: errOut });
       return;
     }

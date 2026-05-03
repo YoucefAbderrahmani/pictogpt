@@ -1910,7 +1910,7 @@ export default function App() {
               <Text style={styles.teamLobbyEmptyHint}>
                 {isAdminLoggedIn
                   ? 'Admin bypass active: shared lobby is accessible without sending a QCM photo first.'
-                  : `QCM is on by default (glowing QCM). Photograph a real QCM sheet, then Send all. The lobby unlocks only when the model returns a valid compact key (at least ${MIN_QCM_PAIRS_ACCEPT} questions). Random photos will not qualify.`}
+                  : `QCM is on by default (glowing QCM). Photograph a real QCM sheet, then Send all. The lobby unlocks when the model returns a valid compact key (at least ${MIN_QCM_PAIRS_ACCEPT} question(s)). Random photos will not qualify.`}
               </Text>
             ) : null}
             {lobbyAccessible && teamSharedLogs.length > 0 ? (
