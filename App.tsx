@@ -53,14 +53,19 @@ const KEY_NOTIFY_ONBOARDING = 'picture_to_sms_notify_onboarded_v1';
 const SHARED_LOBBY_POLL_MS = 8000;
 /** Shared lobby unlock: QCM mode + compact key must look like a real sheet (enough questions). */
 const MIN_QCM_PAIRS_FOR_LOBBY = 3;
-/** Newline before quoted chosen-option text (matches server `QCM_TAIL_GAP` in `lib/qcmSmsFormat.js`). */
+/** Legacy QCM lines: newline before a quoted tail after the compact key. */
 const QCM_TAIL_GAP = '\n';
 /** Compact QCM key only, e.g. `1A-2B-3S` or `37A-38B`. */
 const COMPACT_QCM_BODY = /^(\d{1,6}[ABCDES])(-\d{1,6}[ABCDES])*$/i;
 
-/** Extract compact key from SMS body (optional legacy stem, `compact\n"tail"`, or legacy `compact   "tail"`). */
+/** Extract compact key from SMS body (`q)___stem\\ncompact`, optional legacy stem, quoted tails, or plain compact). */
 function extractQcmCompactFromSmsBody(smsBody: string): string | null {
   const t = String(smsBody || '').trim();
+  const stemBlock = /^(\d{1,6}\)___[^\r\n]*)\r?\n(((?:\d{1,6}[ABCDES])(?:-\d{1,6}[ABCDES])*))\s*$/i.exec(t);
+  if (stemBlock) {
+    const c = stemBlock[2].replace(/\s+/g, '');
+    return COMPACT_QCM_BODY.test(c) ? c : null;
+  }
   const legacy = /^"[^"]*"\s*__+\s*(.+)$/i.exec(t);
   if (legacy) {
     const c = legacy[1].trim().replace(/\s+/g, '');
@@ -160,10 +165,10 @@ Compact answer key (required meaning of your choices):
 
 Output rules:
 - Return a single JSON object only. No markdown, no code fences, no commentary before or after.
-- For every non-skipped answer, each **choices** item must include accurate **text** (full option wording as printed). The server shortens that wording for the SMS tail to the **first word, maximum 5 characters**, then appends it after the compact key (a new line, then that snippet in quotes).
-- Optional: **first_answer_tail** (string) — if set, the server applies the same first-word / 5-character rule for the quoted tail (use when choice objects are incomplete).
+- Each answer must include **question** (the stem text as printed on the sheet). The server builds the SMS body as **two lines with no double quotes**: line 1 is **printed q** then **)** then **___** (three underscores) then the **first 7 characters** of the **lowest-q** question’s stem; line 2 is the compact key (e.g. **37A-38B-39S**).
+- For every non-skipped answer, each **choices** item must include accurate **text** (full option wording as printed).
 - Use this schema (all keys lowercase); **q** is the **printed** question number when visible (example 37), otherwise 1-based order among unnumbered items:
-{"total_questions":NUMBER,"first_answer_tail":"","answers":[{"q":37,"question":"STEM","choices":[{"label":"A","text":"..."},{"label":"B","text":"..."},{"label":"C","text":"..."},{"label":"D","text":"..."}],"a":"A"}, ...]}
+{"total_questions":NUMBER,"answers":[{"q":37,"question":"STEM","choices":[{"label":"A","text":"..."},{"label":"B","text":"..."},{"label":"C","text":"..."},{"label":"D","text":"..."}],"a":"A"}, ...]}
 - Include a choices array for every question when options are legible; each item must have label (A–D or A–E) and text (the option wording). If the question is skipped (a equals S), choices may be an empty array [] or best-effort partial text—do not invent fake options.
 - "total_questions" must equal the length of "answers". Each **q** must be a **positive integer** matching the sheet when possible; **no duplicate q**. **a** must be one of A/B/C/D/E (matching an existing label when not skipped) or **S** when skipped.`;
 
@@ -221,11 +226,18 @@ function compactQcmPayloadSansSlotPrefix(s: string): string | null {
   return extractQcmCompactFromSmsBody(t) ? t : null;
 }
 
-/** Payload after `N)__`: `1A-2B\n"tail"`, legacy `1A-2B   "tail"`, legacy quoted-stem formats, or plain compact. */
+/** Payload after `N)__`: `q)___stem\\ncompact`, legacy quoted tails, legacy quoted-stem formats, or plain compact. */
 function parseAnswerKeyRest(rest: string): { display: string } | null {
   const restTrim = rest.trim();
   if (!restTrim || /\bskipped\b/i.test(restTrim)) return null;
   const collapsed = restTrim.replace(/\s+/g, '');
+
+  const stemFirst = /^((\d{1,6})\)___[^\r\n]*)\r?\n(((?:\d{1,6}[ABCDES])(?:-\d{1,6}[ABCDES])*))\s*$/i.exec(restTrim);
+  if (stemFirst) {
+    const compact = stemFirst[3].replace(/\s+/g, '');
+    if (!COMPACT_QCM_BODY.test(compact)) return null;
+    return { display: `${stemFirst[1]}\n${compact}` };
+  }
 
   const legacy = /^"([^"]*)"\s*__+\s*(.+)$/i.exec(restTrim);
   if (legacy) {
@@ -256,11 +268,11 @@ function parseAnswerKeyRest(rest: string): { display: string } | null {
   return null;
 }
 
-/** Normalize to a single `N)__…` line for UI, or null to hide the row. */
+/** Normalize to `N)__…` for UI (payload may span multiple lines), or null to hide the row. */
 function displayAnswerKeyLineFromStored(raw: string): string | null {
   const s = String(raw || '').trim().replace(/^×\d+\s+/, '');
   if (!s) return null;
-  const m = s.match(/^(\d{1,6})\)__(.+)$/);
+  const m = s.match(/^(\d{1,6})\)__([\s\S]+)$/);
   if (!m) return null;
   const parsed = parseAnswerKeyRest(m[2]);
   if (!parsed) return null;
