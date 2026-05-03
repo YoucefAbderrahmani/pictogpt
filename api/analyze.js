@@ -6,6 +6,7 @@ import {
 import {
   isOpenRouterSwitchModelError,
   openRouterModelCandidates,
+  openRouterOutboundHeaders,
   readOpenRouterApiResponseBody,
 } from '../lib/openRouterModelCandidates.js';
 import { toQcmSmsFormat } from '../lib/qcmSmsFormat.js';
@@ -178,6 +179,7 @@ async function analyzeWithOpenRouter({ key, userPrompt, dataUrl }) {
         headers: {
           Authorization: `Bearer ${key}`,
           'Content-Type': 'application/json',
+          ...openRouterOutboundHeaders(),
         },
         body: JSON.stringify({
           model,
@@ -205,6 +207,16 @@ async function analyzeWithOpenRouter({ key, userPrompt, dataUrl }) {
       }
 
       const msg = json?.error?.message || `OpenRouter error (${openRouterRes.status})`;
+      if (openRouterRes.status === 401) {
+        throw new Error(
+          `OpenRouter HTTP 401 — OPENROUTER_API_KEY on this server is invalid or does not match the OpenRouter account that has credits. Regenerate the key at https://openrouter.ai/keys and paste it into Vercel env. Raw: ${String(msg).slice(0, 300)}`
+        );
+      }
+      if (openRouterRes.status === 402) {
+        throw new Error(
+          `OpenRouter HTTP 402 — payment required for this route or key. Credits on a different account do not apply. Raw: ${String(msg).slice(0, 400)}`
+        );
+      }
       const switchHint = `${msg} ${(rawBody || '').slice(0, 1200)}`;
       if (isOpenRouterSwitchModelError(switchHint, openRouterRes.status)) {
         failures.push(`${model}@${maxTokens}: ${String(msg).slice(0, 280)}`);
