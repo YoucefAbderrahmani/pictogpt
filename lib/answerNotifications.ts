@@ -1,6 +1,11 @@
 import { Platform } from 'react-native';
 import * as Notifications from 'expo-notifications';
-import { isValidQcmCompactLine, qcmLeadingCompact } from './qcmSmsFormat.js';
+import {
+  hasQcmStemHeaderFormat,
+  hasQuotedAnswerTail,
+  isValidQcmCompactLine,
+  qcmLeadingCompact,
+} from './qcmSmsFormat.js';
 
 const ANDROID_CHANNEL_ID = 'pictoxam-answers';
 
@@ -53,7 +58,7 @@ export async function requestAnswerNotificationPermission(): Promise<boolean> {
   }
 }
 
-/** Outbound SMS uses `N)__payload`; notifications use `N)payload` (no `__`) and never duplicate that prefix. */
+/** Strip outbound SMS prefix `photoSlot)__` so we never duplicate it in the notification. */
 function stripLeadingSmsSlotPrefix(body: string): string {
   return String(body || '')
     .trim()
@@ -61,28 +66,38 @@ function stripLeadingSmsSlotPrefix(body: string): string {
     .trim();
 }
 
+/**
+ * Same layout as in-app QCM payload (line1 = `q)` + first 11 stem chars + ` ...`, line2 = compact).
+ * No `__`. Matches e.g. `1)first eleven …\n1A-2B-3A` or `7)first eleven …\n7B-8D-9A`.
+ */
 function formatAnswerNotificationBody(body: string, slot?: number | null): string {
   let t = String(body || '').trim();
   t = stripLeadingSmsSlotPrefix(t);
   if (!t) return '';
 
-  const compact = qcmLeadingCompact(t);
-  const compactOnly = compact && isValidQcmCompactLine(compact) ? compact : null;
-
-  if (typeof slot === 'number' && Number.isFinite(slot) && slot >= 1) {
-    if (compactOnly) return `${slot})${compactOnly}`;
-    const oneLine = t.replace(/\s+/g, ' ').trim();
-    return `${slot})${oneLine}`;
+  if (hasQcmStemHeaderFormat(t) || hasQuotedAnswerTail(t)) {
+    return t;
   }
 
-  if (compactOnly) return compactOnly;
-  return t.replace(/\s+/g, ' ').trim();
+  const compact = qcmLeadingCompact(t);
+  if (compact && isValidQcmCompactLine(compact)) {
+    if (typeof slot === 'number' && Number.isFinite(slot) && slot >= 1) {
+      return `${slot})\n${compact}`;
+    }
+    return compact;
+  }
+
+  const oneLine = t.replace(/\s+/g, ' ').trim();
+  if (typeof slot === 'number' && Number.isFinite(slot) && slot >= 1) {
+    return `${slot})\n${oneLine}`;
+  }
+  return oneLine;
 }
 
-/** Heads-up local alert: `N)compact` or `N)one line` (no `N)__` SMS transport prefix). */
+/** Heads-up local alert: same QCM lines as the app (no `N)__` in the text). */
 export async function presentAnswerNotification(body: string, slot?: number | null): Promise<void> {
   if (Platform.OS === 'web') return;
-  const text = formatAnswerNotificationBody(body, slot).slice(0, 500);
+  const text = formatAnswerNotificationBody(body, slot).slice(0, 2000);
   if (!text) return;
   try {
     installAnswerNotificationHandler();
