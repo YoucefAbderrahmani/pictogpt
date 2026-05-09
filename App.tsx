@@ -154,12 +154,17 @@ const DEFAULT_PROMPT =
   'Describe what you see in this image clearly and concisely. Keep the reply short and plain text (no markdown).';
 const QCM_PROMPT = `You are reading a multiple-choice exam (QCM) from the attached image. Your job is to OCR, **detect each question and its answer options**, and output **one unified JSON format** so the compact key is like **1A-2BC-3S** (question number + chosen letter(s), or **S** for skip; sort by **q** ascending).
 
-How to find questions and assign **q** (question number):
+How to find questions and assign **q** (question number) — **strict priority order**:
 - Parse questions regardless of page orientation, block position, camera tilt, or rotation angle (0/90/180/270). Mentally rotate/normalize first, then extract all questions you can read.
 - Read top-to-bottom, left-to-right (or follow clear columns). Each **question** is a stem plus the set of choices that belong to it (same visual group: spacing, indentation, box, or column).
-- **If the sheet prints a question number** next to or in the heading for that item (e.g. 37, Q5, “Question 12”), use that integer as **q**. Keep multi-page logic: do **not** renumber real printed numbers (e.g. 37, 38, 39 stay 37, 38, 39).
-- **If a question has no printed number**, assign **q** from **reading order on this page/image only**: the first question you identify is **q=1**, the next is **q=2**, then **3**, and so on. When printed numbers resume later, switch back to printed values for those items.
-- Numeric ordering is mandatory in final output: if detected questions jump (example: **2** then **42**), keep ascending order and include intermediate numbers (**3..41**) with **a:"S"** when they are not confidently readable.
+
+**Priority 1 — Printed enumeration on the sheet (highest):** Whenever the page shows an explicit **question** index, use that integer as **q**. Treat as the same priority any common print patterns, including: **1.** / **1)** / **1 -** before the stem, **Q1** / **Q 1** / **Question 1** / **Quest. 1**, section items like **§1**, etc. Strip decoration and use the integer only. Never renumber these (e.g. if the page says **37**, **38**, **39**, then **q** is **37**, **38**, **39**).
+
+**Priority 2 — Infer q from a reliable anchor:** If some stems or blocks are blurry or incomplete but **at least one** question has a **clear printed number** (Priority 1), use that as a **reference**: same column/section layout, consistent step (usually +1), and reading order to assign **q** to neighbouring items that lack a visible number. If you infer a number, still output that **q**; use **a:"S"** when the answer cannot be read. Do **not** invent a printed number in the **question** text — only set the JSON **q** field.
+
+**Priority 3 — No printed enumeration anywhere:** If **no** question on the image shows any explicit question numbering, assign **q** by **reading order on this image only**: first identifiable question **q=1**, next **q=2**, and so on.
+
+- Numeric ordering in the final **answers** array: sort by **q** ascending. If **q** values jump (e.g. you have **2** and **42** with nothing between), keep ascending order and include intermediate **q** with **a:"S"** when those items are not confidently readable or not on the page.
 - Stems may appear **above or below** the options, or options may be listed first (“reversed” layout). Use layout and grouping to decide which options belong to which stem—do not split one question across two **q** values.
 - **French “QCM / Exemple de questions” style (and similar):** a section title may repeat for each block. The stem often starts with a bullet (•) or dash; **choices are numbered 1. 2. 3. 4. 5.** (or 1) 2) …). Those numbers are **choice indices**, not question numbers. Map the **first** numbered line under that stem to label **A**, the second to **B**, … the fifth to **E** in your JSON **choices** array. If the **same** stem+options block appears twice as two separate visual blocks, treat them as **two questions** in order (**q** increases) unless it is clearly one question accidentally duplicated by the camera—use two **q** values when in doubt.
 - **Never** use a choice-line number (1–5) as **q**; **q** is always the question index as above.
@@ -188,7 +193,7 @@ Image quality:
 Output rules:
 - Return a single JSON object only. No markdown, no code fences, no commentary before or after.
 - **Complete JSON is mandatory:** include **every** question on the sheet in **answers** — do not stop early or truncate. Long sheets must still be fully enumerated.
-- Each answer object must include **question** (stem as printed). The app sends SMS in blocks of **10** answers per message. Server header line (after photo slot) is: **firstQuestionNumber) first10chars...** — only **one** question number on that line. Second line: compact pairs like **11A-12B-...**.
+- Each answer object must include **question** (stem as printed). The app sends SMS in blocks of **10** answers per message. Each message header line is: **firstQuestionNumber) first10chars...** — only **one** question number on that line. Second line: compact pairs like **11A-12B-...**.
 - For every non-skipped answer, each **choices** item needs accurate **text** (full wording as printed).
 - Schema (keys lowercase); add as many **choices** entries as there are boxes (labels **A** … **Z** in visual order):
 {"total_questions":NUMBER,"answers":[{"q":2,"question":"STEM","choices":[{"label":"A","text":"..."},{"label":"B","text":"..."},{"label":"C","text":"..."}],"a":"AC"}, ...]}
