@@ -122,8 +122,9 @@ function isOpenRouterTokenBudgetError(message) {
 }
 
 /** @returns {{ content: string; answerModel: string }} */
-async function analyzeWithOpenRouter({ key, userPrompt, dataUrl }) {
-  const cap = envIntInRange('OPENROUTER_MAX_TOKENS', 1024, 256, 4096);
+async function analyzeWithOpenRouter({ key, userPrompt, dataUrl, qcmMode }) {
+  const defaultCap = qcmMode ? 3072 : 1024;
+  const cap = envIntInRange('OPENROUTER_MAX_TOKENS', defaultCap, 256, 4096);
   const failures = [];
   const models = openRouterModelCandidates();
   if (process.env.NODE_ENV !== 'test') {
@@ -342,7 +343,12 @@ export default async function handler(req, res) {
 
     for (let i = 0; i < openRouterKeys.length; i += 1) {
       try {
-        const r = await analyzeWithOpenRouter({ key: openRouterKeys[i], userPrompt, dataUrl });
+        const r = await analyzeWithOpenRouter({
+          key: openRouterKeys[i],
+          userPrompt,
+          dataUrl,
+          qcmMode: needsValidQcm,
+        });
         if (acceptModelResult(r)) break;
         attemptErrors.push(`OpenRouter key #${i + 1}: ${qcmHint}`);
       } catch (e) {

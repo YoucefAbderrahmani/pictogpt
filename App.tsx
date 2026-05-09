@@ -63,6 +63,11 @@ const QCM_TAIL_GAP = '\n';
 /** Extract compact key from SMS body (`q)stem …\\ncompact`, optional legacy `q)___…`, quoted tails, or plain compact). */
 function extractQcmCompactFromSmsBody(smsBody: string): string | null {
   const t = String(smsBody || '').trim();
+  const singleStemBlock = /^(\d{1,6}[)]\s+[^\r\n]*)\r?\n([^\r\n]+)\s*$/i.exec(t);
+  if (singleStemBlock) {
+    const c = singleStemBlock[2].replace(/\s+/g, '');
+    return isValidQcmCompactLine(c) ? c : null;
+  }
   const groupedStemBlock = /^(\d{1,6}[)]__\d{1,6}[)][^\r\n]*)\r?\n([^\r\n]+)\s*$/i.exec(t);
   if (groupedStemBlock) {
     const c = groupedStemBlock[2].replace(/\s+/g, '');
@@ -182,11 +187,12 @@ Image quality:
 
 Output rules:
 - Return a single JSON object only. No markdown, no code fences, no commentary before or after.
-- Each answer object must include **question** (stem as printed). SMS output is grouped in blocks of 10 questions. Header line format: **groupNumber)__firstQuestionNumber) first10chars...**. Second line: compact pairs like **1A-2B-...**.
+- **Complete JSON is mandatory:** include **every** question on the sheet in **answers** — do not stop early or truncate. Long sheets must still be fully enumerated.
+- Each answer object must include **question** (stem as printed). The app sends SMS in blocks of **10** answers per message. Server header line (after photo slot) is: **firstQuestionNumber) first10chars...** — only **one** question number on that line. Second line: compact pairs like **11A-12B-...**.
 - For every non-skipped answer, each **choices** item needs accurate **text** (full wording as printed).
 - Schema (keys lowercase); add as many **choices** entries as there are boxes (labels **A** … **Z** in visual order):
 {"total_questions":NUMBER,"answers":[{"q":2,"question":"STEM","choices":[{"label":"A","text":"..."},{"label":"B","text":"..."},{"label":"C","text":"..."}],"a":"AC"}, ...]}
-- Include **choices** when legible; skipped questions may use [] or partial choices. **total_questions** equals **answers** length. **q** positive integers, no duplicates. **a** is **S** or a sorted unique **A–E** string (like **A**, **BC**, **ACE**).`;
+- Include **choices** when legible; skipped questions may use [] or partial choices. **total_questions** equals **answers** length (must match how many questions are on this image). **q** positive integers, no duplicates. **a** is **S** or a sorted unique **A–E** string (like **A**, **BC**, **ACE**).`;
 
 function buildQcmConflictVerifyPrompt(
   compactNew: string,
@@ -259,11 +265,18 @@ function compactQcmPayloadSansSlotPrefix(s: string): string | null {
   return extractQcmCompactFromSmsBody(t) ? t : null;
 }
 
-/** Payload after `N)__`: `group)__q) stem...\\ncompact`, legacy formats, or plain compact. */
+/** Payload after `N)__`: `q) stem...\\ncompact`, legacy grouped header, or plain compact. */
 function parseAnswerKeyRest(rest: string): { display: string } | null {
   const restTrim = rest.trim();
   if (!restTrim || /\bskipped\b/i.test(restTrim)) return null;
   const collapsed = restTrim.replace(/\s+/g, '');
+
+  const singleStemFirst = /^(\d{1,6}[)]\s+[^\r\n]*)\r?\n([^\r\n]+)\s*$/i.exec(restTrim);
+  if (singleStemFirst) {
+    const compact = singleStemFirst[2].replace(/\s+/g, '');
+    if (!isValidQcmCompactLine(compact)) return null;
+    return { display: `${singleStemFirst[1]}\n${compact}` };
+  }
 
   const groupedStemFirst = /^(\d{1,6}[)]__\d{1,6}[)][^\r\n]*)\r?\n([^\r\n]+)\s*$/i.exec(restTrim);
   if (groupedStemFirst) {
