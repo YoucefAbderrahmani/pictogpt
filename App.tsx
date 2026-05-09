@@ -160,7 +160,7 @@ How to find questions and assign **q** (question number) — **strict priority o
 
 **Priority 1 — Printed enumeration on the sheet (highest):** Whenever the page shows an explicit **question** index, use that integer as **q**. Treat as the same priority any common print patterns, including: **1.** / **1)** / **1 -** before the stem, **Q1** / **Q 1** / **Question 1** / **Quest. 1**, section items like **§1**, etc. Strip decoration and use the integer only. Never renumber these (e.g. if the page says **37**, **38**, **39**, then **q** is **37**, **38**, **39**).
 
-**Priority 2 — Infer q from a reliable anchor:** If some stems or blocks are blurry or incomplete but **at least one** question has a **clear printed number** (Priority 1), use that as a **reference**: same column/section layout, consistent step (usually +1), and reading order to assign **q** to neighbouring items that lack a visible number. If you infer a number, still output that **q**; use **a:"S"** when the answer cannot be read. Do **not** invent a printed number in the **question** text — only set the JSON **q** field.
+**Priority 2 — Reference-based reconstruction:** If some questions are not perfectly parsed or their numbering is unclear, but **at least one** question is **clearly and correctly enumerated** (Priority 1), use that correctly parsed question as a **reference pattern** to reconstruct and enumerate the **remaining** questions **consistently** (same layout rules, step, and reading order as implied by the sheet).
 
 **Priority 3 — No printed enumeration anywhere:** If **no** question on the image shows any explicit question numbering, assign **q** by **reading order on this image only**: first identifiable question **q=1**, next **q=2**, and so on.
 
