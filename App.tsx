@@ -234,7 +234,7 @@ function buildQcmConflictVerifyPrompt(
 CONFLICT RESOLUTION (mandatory): Two readings of this same page disagree for at least one question number that appears in both compact keys.
 
 Your first-pass compact would be: ${compactNew}
-Conflicting reference compact (from an earlier send, batch, or team lobby): ${compactPrior}
+Conflicting reference compact (from **another photo in this same Send-all queue**, not lobby or past sessions): ${compactPrior}
 
 Re-read the image from scratch. For every question number present in **either** compact above, output the best **a** value (**A–E** letters, possibly multi-letter like **AC**, or **S** if illegible) based only on the image — do not copy either compact blindly. Merge into a single JSON object using the exact same schema and output rules as above (answers with q, question, choices, a; total_questions). Include every such question number. No markdown fences, no text outside the JSON.`;
 }
@@ -1757,8 +1757,6 @@ export default function App() {
     const recipients = allValidDestinations(merged.phones);
     const smsDispatchAllowed = merged.smsSendingEnabled !== false;
     let canSendSms = smsDispatchAllowed && recipients.length > 0;
-    let historyCompacts: string[] = [];
-    let lobbyCompacts: string[] = [];
     const batchQcmCompacts: string[] = [];
 
     try {
@@ -1772,29 +1770,6 @@ export default function App() {
         }
       } else if (recipients.length > 0 && !smsDispatchAllowed) {
         setStatus('SMS sending is disabled in admin (server). Analysis still runs; outbound SMS skipped.');
-      }
-
-      if (qcmMode) {
-        const historyRows = await readAnswerHistory();
-        historyCompacts = Array.from(
-          new Set(
-            historyRows
-              .filter((r) => r.kind === 'sent')
-              .map((r) => extractQcmCompactFromSmsBody(r.body))
-              .filter((c): c is string => Boolean(c))
-              .map((c) => c.replace(/\s+/g, '').toUpperCase())
-          )
-        );
-        lobbyCompacts = Array.from(
-          new Set(
-            teamSharedLogs
-              .map((row) =>
-                extractQcmCompactFromSmsBody(typeof row.body === 'string' ? row.body : '')
-              )
-              .filter((c): c is string => Boolean(c))
-              .map((c) => c.replace(/\s+/g, '').toUpperCase())
-          )
-        );
       }
 
       while (pending.length > 0) {
@@ -1842,7 +1817,7 @@ export default function App() {
 
           if (qcmMode && merged.backendUrl) {
             const compact0 = extractQcmCompactFromSmsBody(smsBody);
-            const priorCompacts = [...batchQcmCompacts, ...historyCompacts, ...lobbyCompacts];
+            const priorCompacts = [...batchQcmCompacts];
             const conflictPeer =
               compact0 && findQcmCompactConflict(compact0, priorCompacts);
             if (conflictPeer) {
@@ -2029,7 +2004,6 @@ export default function App() {
     teamFeedUnlocked,
     smsSendingEnabled,
     refreshTeamSharedLogs,
-    teamSharedLogs,
   ]);
 
   const finishCamera = useCallback(
