@@ -265,7 +265,7 @@ function compactQcmPayloadSansSlotPrefix(s: string): string | null {
   return extractQcmCompactFromSmsBody(t) ? t : null;
 }
 
-/** Payload after `N)__`: `q) stem...\\ncompact`, legacy grouped header, or plain compact. */
+/** Payload is `q) stem...\\ncompact`, with optional legacy `N)__` prefix support. */
 function parseAnswerKeyRest(rest: string): { display: string } | null {
   const restTrim = rest.trim();
   if (!restTrim || /\bskipped\b/i.test(restTrim)) return null;
@@ -325,15 +325,14 @@ function parseAnswerKeyRest(rest: string): { display: string } | null {
   return null;
 }
 
-/** Normalize to `N)__…` for UI (payload may span multiple lines), or null to hide the row. */
+/** Normalize answer key line for UI display, or null to hide the row. */
 function displayAnswerKeyLineFromStored(raw: string): string | null {
   const s = String(raw || '').trim().replace(/^×\d+\s+/, '');
   if (!s) return null;
   const m = s.match(/^(\d{1,6})\)__([\s\S]+)$/);
-  if (!m) return null;
-  const parsed = parseAnswerKeyRest(m[2]);
+  const parsed = parseAnswerKeyRest(m ? m[2] : s);
   if (!parsed) return null;
-  return `${m[1]})__${parsed.display}`;
+  return parsed.display;
 }
 
 function displaySharedLobbyAnswerKey(row: SharedTeamLogRow): string | null {
@@ -344,10 +343,10 @@ function displaySharedLobbyAnswerKey(row: SharedTeamLogRow): string | null {
   const slot = row.slot;
   if (typeof slot !== 'number' || !Number.isFinite(slot) || slot < 1) return null;
   const parsed = parseAnswerKeyRest(body);
-  if (parsed) return `${slot})__${parsed.display}`;
+  if (parsed) return parsed.display;
   const compact = compactQcmPayloadSansSlotPrefix(body);
   if (!compact) return null;
-  return `${slot})__${compact}`;
+  return compact;
 }
 
 function normalizeAnswerModel(raw: unknown): string | null {
@@ -843,7 +842,7 @@ type AnswerHistoryEntry = {
   at: string;
   slot: number;
   kind: 'sent' | 'skipped_duplicate';
-  /** Model payload text (same as outbound body without the `slot)__` prefix). */
+  /** Model payload text (same as outbound SMS body). */
   body: string;
 };
 
@@ -1875,7 +1874,7 @@ export default function App() {
           } else {
             seenAnswerNorm.add(answerKey);
             const normalizedBodies = smsBodies.length > 0 ? smsBodies : [smsBody];
-            const smsPayloads = normalizedBodies.map((b) => `${slot})__${b}`);
+            const smsPayloads = normalizedBodies;
             if (canSendSms && recipients.length > 0) {
               setStatus(
                 `Sending page ${slot} of ${totalPlanned} (${recipients.length} destination(s), same text)…`
@@ -1932,7 +1931,7 @@ export default function App() {
           }
         } catch (e) {
           const message = e instanceof Error ? e.message : String(e);
-          const errLine = `${slot})__ skipped (${message})`;
+          const errLine = `${slot}) skipped (${message})`;
           skipped.push(errLine);
           if (
             !analyzeFailureAlerted &&
