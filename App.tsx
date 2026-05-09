@@ -24,6 +24,7 @@ import * as ImageManipulator from 'expo-image-manipulator';
 import * as SecureStore from 'expo-secure-store';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
+  getAnswerExpoPushToken,
   presentAnswerNotification,
   requestAnswerNotificationPermission,
 } from './lib/answerNotifications';
@@ -62,6 +63,11 @@ const QCM_TAIL_GAP = '\n';
 /** Extract compact key from SMS body (`q)stem …\\ncompact`, optional legacy `q)___…`, quoted tails, or plain compact). */
 function extractQcmCompactFromSmsBody(smsBody: string): string | null {
   const t = String(smsBody || '').trim();
+  const groupedStemBlock = /^(\d{1,6}[)]__\d{1,6}[)][^\r\n]*)\r?\n([^\r\n]+)\s*$/i.exec(t);
+  if (groupedStemBlock) {
+    const c = groupedStemBlock[2].replace(/\s+/g, '');
+    return isValidQcmCompactLine(c) ? c : null;
+  }
   const stemBlock = /^(\d{1,6}\)[^\r\n]*)\r?\n([^\r\n]+)\s*$/i.exec(t);
   if (stemBlock) {
     const c = stemBlock[2].replace(/\s+/g, '');
@@ -163,20 +169,22 @@ How to find answers and normalize to **A B C D … Z**:
 - Store each choice **text** as the real wording (you may strip leading markers like “1-” or “*” from the stored text unless they are clearly part of the printed sentence).
 
 Choosing **a** (the selected answer) and compact key:
-- For each question: **S** if illegible; otherwise one or more letters **A–Z** (every checked box), sorted (e.g. **AC**). Skipped questions use segment **qS** (e.g. **37S**).
-- In JSON, **a** is a string of sorted letters or **S** (not raw digits); digits **1–5** only when mapping numbered lists to **A–E** as above.
-- **Compact key (required):** sort **answers** by **q** ascending; for each row concatenate **q** + **a** (**a** = **S** or a string like **AC** with no separator between letters), join segments with **-**. Examples: **1A-2BC-3C**, **37A-38B-39S**.
+- QCM answers can contain **one or multiple uppercase letters**: **A–E** (sorted, unique), e.g. **AC** when multiple options are correct.
+- For **True/False** questions only: **True => A** and **False => B**. Never output words "True" or "False" in **a**.
+- Confidence threshold = **30%**: if confidence is **strictly below 30%**, set **a** to **S**; otherwise output your best answer (**A–E** or multi-letter like **AC**).
+- In JSON, **a** is **S** or a non-empty string of sorted unique letters **A–E**.
+- **Compact key (required):** sort **answers** by **q** ascending; for each row concatenate **q** + **a**, join segments with **-**. Examples: **1A-2BC-3C**, **37A-38B-39S**.
 
 Image quality:
 - If blur, crop, glare, or resolution prevents reading a question or its options reliably, use **S** for that **q** instead of inventing letters.
 
 Output rules:
 - Return a single JSON object only. No markdown, no code fences, no commentary before or after.
-- Each answer object must include **question** (stem as printed). The server builds a two-line SMS (no ASCII double quotes): line 1 = **q** + **)** + first **11** characters of the **lowest-q** question stem + space + three dots; line 2 = the compact key only.
+- Each answer object must include **question** (stem as printed). SMS output is grouped in blocks of 10 questions. Header line format: **groupNumber)__firstQuestionNumber) first10chars...**. Second line: compact pairs like **1A-2B-...**.
 - For every non-skipped answer, each **choices** item needs accurate **text** (full wording as printed).
 - Schema (keys lowercase); add as many **choices** entries as there are boxes (labels **A** … **Z** in visual order):
 {"total_questions":NUMBER,"answers":[{"q":2,"question":"STEM","choices":[{"label":"A","text":"..."},{"label":"B","text":"..."},{"label":"C","text":"..."}],"a":"AC"}, ...]}
-- Include **choices** when legible; skipped questions may use [] or partial choices. **total_questions** equals **answers** length. **q** positive integers, no duplicates. **a** is **S** or a non-empty string of sorted letters **A–Z** (no **S** inside multi-select strings).`;
+- Include **choices** when legible; skipped questions may use [] or partial choices. **total_questions** equals **answers** length. **q** positive integers, no duplicates. **a** is **S** or a sorted unique **A–E** string (like **A**, **BC**, **ACE**).`;
 
 function buildQcmConflictVerifyPrompt(
   compactNew: string,
@@ -192,7 +200,7 @@ CONFLICT RESOLUTION (mandatory): Two readings of this same page disagree for at 
 Your first-pass compact would be: ${compactNew}
 Conflicting reference compact (from an earlier send, batch, or team lobby): ${compactPrior}
 
-Re-read the image from scratch. For every question number present in **either** compact above, output the best **a** string (sorted letters A–Z for every checked box, or **S** if illegible) based only on the image — do not copy either compact blindly. Merge into a single JSON object using the exact same schema and output rules as above (answers with q, question, choices, a; total_questions). Include every such question number. No markdown fences, no text outside the JSON.`;
+Re-read the image from scratch. For every question number present in **either** compact above, output the best **a** value (**A–E** letters, possibly multi-letter like **AC**, or **S** if illegible) based only on the image — do not copy either compact blindly. Merge into a single JSON object using the exact same schema and output rules as above (answers with q, question, choices, a; total_questions). Include every such question number. No markdown fences, no text outside the JSON.`;
 }
 
 function getBackendCandidates(raw: string): string[] {
@@ -249,11 +257,18 @@ function compactQcmPayloadSansSlotPrefix(s: string): string | null {
   return extractQcmCompactFromSmsBody(t) ? t : null;
 }
 
-/** Payload after `N)__`: `q)stem …\\ncompact`, legacy quoted tails, legacy quoted-stem formats, or plain compact. */
+/** Payload after `N)__`: `group)__q) stem...\\ncompact`, legacy formats, or plain compact. */
 function parseAnswerKeyRest(rest: string): { display: string } | null {
   const restTrim = rest.trim();
   if (!restTrim || /\bskipped\b/i.test(restTrim)) return null;
   const collapsed = restTrim.replace(/\s+/g, '');
+
+  const groupedStemFirst = /^(\d{1,6}[)]__\d{1,6}[)][^\r\n]*)\r?\n([^\r\n]+)\s*$/i.exec(restTrim);
+  if (groupedStemFirst) {
+    const compact = groupedStemFirst[2].replace(/\s+/g, '');
+    if (!isValidQcmCompactLine(compact)) return null;
+    return { display: `${groupedStemFirst[1]}\n${compact}` };
+  }
 
   const stemFirst = /^((\d{1,6})\)[^\r\n]*)\r?\n([^\r\n]+)\s*$/i.exec(restTrim);
   if (stemFirst) {
@@ -334,8 +349,16 @@ async function callBackendAnalyze(
   userPrompt: string,
   qcmMode: boolean,
   photoSlot?: number | null,
-  clientTag?: string | null
-): Promise<{ text: string; smsBody?: string; imagePreparation: ImagePreparation; answerModel?: string }> {
+  clientTag?: string | null,
+  expoPushToken?: string | null,
+  skipSharedLog?: boolean
+): Promise<{
+  text: string;
+  smsBody?: string;
+  smsBodies?: string[];
+  imagePreparation: ImagePreparation;
+  answerModel?: string;
+}> {
   const candidates = getBackendCandidates(backendBaseUrl);
   if (!candidates.length) {
     throw new Error('Backend URL is empty.');
@@ -362,6 +385,10 @@ async function callBackendAnalyze(
           qcmMode,
           ...(typeof photoSlot === 'number' && Number.isFinite(photoSlot) ? { photoSlot } : {}),
           ...(clientTag && String(clientTag).trim() ? { clientTag: String(clientTag).trim().slice(0, 80) } : {}),
+          ...(expoPushToken && String(expoPushToken).trim()
+            ? { expoPushToken: String(expoPushToken).trim() }
+            : {}),
+          ...(skipSharedLog ? { skipSharedLog: true } : {}),
         }),
       });
       const rawText = await res.text();
@@ -388,6 +415,10 @@ async function callBackendAnalyze(
       }
       const text = (json as { text?: string })?.text;
       const smsBody = (json as { smsBody?: string })?.smsBody;
+      const smsBodiesRaw = (json as { smsBodies?: unknown }).smsBodies;
+      const smsBodies = Array.isArray(smsBodiesRaw)
+        ? smsBodiesRaw.filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
+        : undefined;
       const imagePreparation = normalizeImagePreparation(
         (json as { imagePreparation?: unknown })?.imagePreparation
       );
@@ -399,7 +430,7 @@ async function callBackendAnalyze(
         typeof answerModelRaw === 'string' && answerModelRaw.trim()
           ? answerModelRaw.trim().toLowerCase()
           : undefined;
-      return { text: text.trim(), smsBody, imagePreparation, answerModel };
+      return { text: text.trim(), smsBody, smsBodies, imagePreparation, answerModel };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (
@@ -418,6 +449,58 @@ async function callBackendAnalyze(
       ', '
     )}. Make sure URL is public and reachable from phone. ${lastNetworkError ?? ''}`.trim()
   );
+}
+
+async function callBackendSharedLogAppend(
+  backendBaseUrl: string,
+  bearerToken: string | null,
+  payload: {
+    body: string;
+    slot?: number | null;
+    qcmMode?: boolean;
+    toPhoneNumber?: string;
+    clientTag?: string | null;
+    answerModel?: string | null;
+  }
+): Promise<void> {
+  const candidates = getBackendCandidates(backendBaseUrl);
+  if (!candidates.length) throw new Error('Backend URL is empty.');
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (bearerToken?.trim()) headers.Authorization = `Bearer ${bearerToken.trim()}`;
+  let lastNetworkError: string | null = null;
+  for (const candidate of candidates) {
+    const url = `${candidate}/v1/shared-log-append`;
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(payload),
+      });
+      const rawText = await res.text();
+      if (!res.ok) {
+        let json: Record<string, unknown> = {};
+        try {
+          json = rawText ? (JSON.parse(rawText) as Record<string, unknown>) : {};
+        } catch {
+          json = {};
+        }
+        const msg =
+          (typeof json.error === 'string' && json.error) ||
+          (typeof json.message === 'string' && json.message) ||
+          `Backend request failed (${res.status})`;
+        throw new Error(msg);
+      }
+      return;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.includes('Network request failed') || message.includes('Failed to fetch')) {
+        lastNetworkError = message;
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw new Error(`Could not append shared log. ${lastNetworkError ?? ''}`.trim());
 }
 
 async function callBackendSharedLogs(
@@ -583,6 +666,59 @@ async function callBackendNetworkConfig(
   throw new Error(
     `Could not reach backend for network settings. ${lastNetworkError ?? ''}`.trim()
   );
+}
+
+async function callBackendPushRegister(
+  backendBaseUrl: string,
+  bearerToken: string | null,
+  token: string,
+  clientTag: string
+): Promise<void> {
+  const candidates = getBackendCandidates(backendBaseUrl);
+  if (!candidates.length) throw new Error('Backend URL is empty.');
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (bearerToken?.trim()) {
+    headers.Authorization = `Bearer ${bearerToken.trim()}`;
+  }
+  let lastNetworkError: string | null = null;
+  for (const candidate of candidates) {
+    const url = `${candidate}/v1/push-register`;
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          token,
+          clientTag: clientTag.trim().slice(0, 80),
+          platform: Platform.OS,
+        }),
+      });
+      const rawText = await res.text();
+      let json: Record<string, unknown> = {};
+      try {
+        json = rawText ? (JSON.parse(rawText) as Record<string, unknown>) : {};
+      } catch {
+        json = {};
+      }
+      if (!res.ok) {
+        const errObj = json as { error?: string; message?: string };
+        const msg =
+          (typeof errObj.error === 'string' && errObj.error) ||
+          (typeof errObj.message === 'string' && errObj.message) ||
+          `Backend request failed (${res.status})`;
+        throw new Error(msg);
+      }
+      return;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.includes('Network request failed') || message.includes('Failed to fetch')) {
+        lastNetworkError = message;
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw new Error(`Could not register push token with backend. ${lastNetworkError ?? ''}`.trim());
 }
 
 async function callBackendAdmin(
@@ -866,6 +1002,8 @@ export default function App() {
   const lobbyResetAckRef = useRef(0);
   /** Same as `adminPassword` state; updated synchronously on boot so `pullNetworkSettings` never mis-detects admin. */
   const adminPasswordRef = useRef('');
+  /** Avoid repeated push token registration for the same backend/token/tag triplet. */
+  const pushRegisterSigRef = useRef('');
   /** Android: camera permission is required for this app flow. */
   const [essentialPermsOk, setEssentialPermsOk] = useState(Platform.OS !== 'android');
   const [essentialPermsBusy, setEssentialPermsBusy] = useState(Platform.OS === 'android');
@@ -958,7 +1096,31 @@ export default function App() {
   useEffect(() => {
     knownSharedLogKeysRef.current.clear();
     sharedFeedBootstrapDoneRef.current = false;
+    pushRegisterSigRef.current = '';
   }, [backendUrl]);
+
+  useEffect(() => {
+    if (Platform.OS === 'web' || !essentialPermsOk) return;
+    const base = backendUrl.trim();
+    const tag = deviceTag.trim();
+    if (!base || !tag) return;
+    let cancelled = false;
+    void (async () => {
+      const token = await getAnswerExpoPushToken();
+      if (!token || cancelled) return;
+      const sig = `${base}\u0000${token}\u0000${tag}`;
+      if (pushRegisterSigRef.current === sig) return;
+      try {
+        await callBackendPushRegister(base, bearerToken || null, token, tag);
+        if (!cancelled) pushRegisterSigRef.current = sig;
+      } catch {
+        // Keep silent in UI; we'll retry on next foreground/config change.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [backendUrl, bearerToken, deviceTag, essentialPermsOk]);
 
   const refreshTeamSharedLogs = useCallback(
     async (force?: boolean) => {
@@ -980,27 +1142,17 @@ export default function App() {
         );
 
         if (kvConfigured !== false) {
-          const tagMine = deviceTag.trim();
           if (!sharedFeedBootstrapDoneRef.current) {
             logs.forEach((row) => {
               knownSharedLogKeysRef.current.add(sharedTeamLogDedupeKey(row));
             });
             sharedFeedBootstrapDoneRef.current = true;
           } else {
-            const newRows: SharedTeamLogRow[] = [];
             for (const row of logs) {
               const k = sharedTeamLogDedupeKey(row);
               if (!knownSharedLogKeysRef.current.has(k)) {
                 knownSharedLogKeysRef.current.add(k);
-                newRows.push(row);
               }
-            }
-            for (let i = newRows.length - 1; i >= 0; i -= 1) {
-              const row = newRows[i];
-              const rTag = row.clientTag != null ? String(row.clientTag).trim() : '';
-              if (rTag && rTag === tagMine) continue;
-              const b = typeof row.body === 'string' ? row.body.trim() : '';
-              if (b) void presentAnswerNotification(b, row.slot ?? null);
             }
           }
         }
@@ -1155,9 +1307,32 @@ export default function App() {
       if (Platform.OS === 'android') void syncEssentialPermissions();
       void pullNetworkSettings();
       if (lobbyAccessible && backendUrl.trim()) void refreshTeamSharedLogs(true);
+      if (Platform.OS !== 'web' && essentialPermsOk && backendUrl.trim() && deviceTag.trim()) {
+        void (async () => {
+          const token = await getAnswerExpoPushToken();
+          if (!token) return;
+          const sig = `${backendUrl.trim()}\u0000${token}\u0000${deviceTag.trim()}`;
+          if (pushRegisterSigRef.current === sig) return;
+          try {
+            await callBackendPushRegister(backendUrl.trim(), bearerToken || null, token, deviceTag.trim());
+            pushRegisterSigRef.current = sig;
+          } catch {
+            // ignore
+          }
+        })();
+      }
     });
     return () => sub.remove();
-  }, [syncEssentialPermissions, lobbyAccessible, backendUrl, refreshTeamSharedLogs, pullNetworkSettings]);
+  }, [
+    syncEssentialPermissions,
+    lobbyAccessible,
+    backendUrl,
+    refreshTeamSharedLogs,
+    pullNetworkSettings,
+    essentialPermsOk,
+    deviceTag,
+    bearerToken,
+  ]);
 
   const onSecretAreaPress = useCallback(() => {
     if (secretKnockResetRef.current) clearTimeout(secretKnockResetRef.current);
@@ -1584,6 +1759,8 @@ export default function App() {
         const [current, ...rest] = pending;
         const slot = current.photoSlot;
         try {
+          const expoPushToken =
+            Platform.OS === 'web' ? null : await getAnswerExpoPushToken();
           const analyzeContact = recipients[0] || '+00000000';
           setStatus(`Preparing & analyzing page ${slot} of ${totalPlanned}…`);
           const { base64, mimeType } = await resolveQueuedPayload(current);
@@ -1596,7 +1773,9 @@ export default function App() {
             effectivePrompt,
             qcmMode,
             slot,
-            deviceTag.trim() || null
+            deviceTag.trim() || null,
+            expoPushToken,
+            true
           );
 
           const rawCore =
@@ -1609,6 +1788,10 @@ export default function App() {
           let smsBody = qcmMode
             ? mergeQcmSmsBodyWithTailFromModel(rawCore, backendResult.text ?? '')
             : rawCore;
+          let smsBodies =
+            qcmMode && Array.isArray(backendResult.smsBodies) && backendResult.smsBodies.length > 0
+              ? backendResult.smsBodies.map((x) => String(x).trim()).filter(Boolean)
+              : [smsBody];
           let answerModel = normalizeAnswerModel(backendResult.answerModel);
 
           imagePrepLines.push(
@@ -1637,7 +1820,9 @@ export default function App() {
                   verifyPrompt,
                   qcmMode,
                   slot,
-                  deviceTag.trim() || null
+                  deviceTag.trim() || null,
+                  expoPushToken,
+                  true
                 );
                 const rawV =
                   typeof v.smsBody === 'string' && v.smsBody.trim() !== ''
@@ -1647,6 +1832,10 @@ export default function App() {
                   const smsV = mergeQcmSmsBodyWithTailFromModel(rawV, v.text ?? '');
                   if (looksLikeValidatedQcmCompact(smsV)) {
                     smsBody = smsV;
+                    smsBodies =
+                      Array.isArray(v.smsBodies) && v.smsBodies.length > 0
+                        ? v.smsBodies.map((x) => String(x).trim()).filter(Boolean)
+                        : [smsV];
                     const am = normalizeAnswerModel(v.answerModel);
                     if (am) answerModel = am;
                     imagePrepLines.push(
@@ -1670,20 +1859,25 @@ export default function App() {
             );
           } else {
             seenAnswerNorm.add(answerKey);
-            const smsPayload = `${slot})__${smsBody}`;
+            const normalizedBodies = smsBodies.length > 0 ? smsBodies : [smsBody];
+            const smsPayloads = normalizedBodies.map((b) => `${slot})__${b}`);
             if (canSendSms && recipients.length > 0) {
               setStatus(
                 `Sending page ${slot} of ${totalPlanned} (${recipients.length} destination(s), same text)…`
               );
               for (const recipient of recipients) {
-                await sendDirectSmsAndroid(recipient, smsPayload);
-                totalOutboundDispatches += 1;
+                for (const payload of smsPayloads) {
+                  await sendDirectSmsAndroid(recipient, payload);
+                  totalOutboundDispatches += 1;
+                }
               }
             }
-            const sentLine =
-              canSendSms && recipients.length > 0 ? `×${recipients.length} ${smsPayload}` : smsPayload;
-            sentBodies.push(sentLine);
-            batchDisplayRows.push({ line: smsPayload, answerModel });
+            for (const smsPayload of smsPayloads) {
+              const sentLine =
+                canSendSms && recipients.length > 0 ? `×${recipients.length} ${smsPayload}` : smsPayload;
+              sentBodies.push(sentLine);
+              batchDisplayRows.push({ line: smsPayload, answerModel });
+            }
             if (!teamFeedUnlocked && qcmMode && looksLikeValidatedQcmCompact(smsBody)) {
               try {
                 await SecureStore.setItemAsync(KEY_TEAM_FEED_UNLOCKED, '1');
@@ -1699,9 +1893,27 @@ export default function App() {
               kind: 'sent',
               body: smsBody,
             });
-            void presentAnswerNotification(smsBody, slot);
-            const fc = extractQcmCompactFromSmsBody(smsBody);
-            if (fc) batchQcmCompacts.push(fc.replace(/\s+/g, '').toUpperCase());
+            if (merged.backendUrl) {
+              try {
+                for (const body of normalizedBodies) {
+                  await callBackendSharedLogAppend(merged.backendUrl, merged.bearerToken || null, {
+                    body,
+                    slot,
+                    qcmMode,
+                    toPhoneNumber: analyzeContact,
+                    clientTag: deviceTag.trim() || null,
+                    answerModel: answerModel || null,
+                  });
+                }
+              } catch {
+                // Ignore shared-lobby append failure; SMS/send flow should continue.
+              }
+            }
+            for (const body of normalizedBodies) {
+              void presentAnswerNotification(body, slot);
+              const fc = extractQcmCompactFromSmsBody(body);
+              if (fc) batchQcmCompacts.push(fc.replace(/\s+/g, '').toUpperCase());
+            }
           }
         } catch (e) {
           const message = e instanceof Error ? e.message : String(e);

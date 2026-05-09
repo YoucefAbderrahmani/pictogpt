@@ -5,7 +5,7 @@ import {
   openRouterOutboundHeaders,
   readOpenRouterApiResponseBody,
 } from '../lib/openRouterModelCandidates.js';
-import { MIN_QCM_PAIRS_ACCEPT, toQcmSmsFormat } from '../lib/qcmSmsFormat.js';
+import { MIN_QCM_PAIRS_ACCEPT, toQcmSmsBatches, toQcmSmsFormat } from '../lib/qcmSmsFormat.js';
 
 const DEFAULT_PROMPT =
   'Describe what you see in this image clearly and concisely. The reply will be sent by SMS, so be direct and avoid markdown.';
@@ -234,7 +234,17 @@ export default async function handler(req, res) {
     return;
   }
 
-  const { toPhoneNumber, imageBase64, mimeType, prompt, qcmMode, photoSlot, clientTag } = body;
+  const {
+    toPhoneNumber,
+    imageBase64,
+    mimeType,
+    prompt,
+    qcmMode,
+    photoSlot,
+    clientTag,
+    expoPushToken,
+    skipSharedLog,
+  } = body;
   if (!imageBase64 || typeof imageBase64 !== 'string') {
     res.status(400).json({ error: 'imageBase64 is required' });
     return;
@@ -309,6 +319,7 @@ export default async function handler(req, res) {
     const needsValidQcm = Boolean(qcmMode);
     let textOut = '';
     let smsBody = '';
+    let smsBodies = [];
     let answerModel = '';
     const attemptErrors = [];
 
@@ -319,8 +330,10 @@ export default async function handler(req, res) {
       if (!raw.trim()) return false;
       const body = needsValidQcm ? toQcmSmsFormat(raw) || '' : raw.trim();
       if (!body) return false;
+      const grouped = needsValidQcm ? toQcmSmsBatches(raw) : [];
       textOut = raw;
       smsBody = body;
+      smsBodies = grouped.length > 0 ? grouped : [body];
       answerModel = r.answerModel || '';
       return true;
     }
@@ -346,24 +359,36 @@ export default async function handler(req, res) {
       return;
     }
     try {
-      const { appendSharedLog } = await import('../lib/sharedStore.js');
+      const { appendSharedLog, setPushSubscription } = await import('../lib/sharedStore.js');
       const digits = String(toPhoneNumber || '').replace(/\D/g, '');
       const tagRaw = typeof clientTag === 'string' ? clientTag.trim().slice(0, 80) : '';
       const safeTag = /^[a-zA-Z0-9_.-]+$/.test(tagRaw) ? tagRaw : null;
-      await appendSharedLog({
-        body: smsBody,
-        slot: typeof photoSlot === 'number' && Number.isFinite(photoSlot) ? photoSlot : null,
-        qcmMode: Boolean(qcmMode),
-        phoneTail: digits.length >= 4 ? digits.slice(-4) : null,
-        clientTag: safeTag,
-        answerModel: answerModel || null,
-      });
+      const pushToken =
+        typeof expoPushToken === 'string' && expoPushToken.trim() ? expoPushToken.trim() : '';
+      if (pushToken) {
+        await setPushSubscription({
+          token: pushToken,
+          clientTag: safeTag,
+          platform: typeof body?.platform === 'string' ? body.platform : null,
+        });
+      }
+      if (!skipSharedLog) {
+        await appendSharedLog({
+          body: smsBody,
+          slot: typeof photoSlot === 'number' && Number.isFinite(photoSlot) ? photoSlot : null,
+          qcmMode: Boolean(qcmMode),
+          phoneTail: digits.length >= 4 ? digits.slice(-4) : null,
+          clientTag: safeTag,
+          answerModel: answerModel || null,
+        });
+      }
     } catch (e) {
       console.error('[api/analyze] appendSharedLog', e);
     }
     res.status(200).json({
       text: textOut.trim(),
       smsBody,
+      smsBodies,
       imagePreparation,
       answerModel: answerModel || undefined,
     });

@@ -66,11 +66,7 @@
     "web": {
       "favicon": "./assets/favicon.png"
     },
-    "extra": {
-      "eas": {
-        "projectId": "040a4b26-22db-46f3-acd6-ed0a5342863d"
-      }
-    },
-    "owner": "vadvoood"
+    "extra": {},
+    "owner": "vadazinho"
   }
 }

@@ -1,5 +1,6 @@
 import { Platform } from 'react-native';
 import * as Notifications from 'expo-notifications';
+import Constants from 'expo-constants';
 import {
   hasQcmStemHeaderFormat,
   hasQuotedAnswerTail,
@@ -58,6 +59,24 @@ export async function requestAnswerNotificationPermission(): Promise<boolean> {
   }
 }
 
+/** EAS push token for remote notifications while app is backgrounded/killed. */
+export async function getAnswerExpoPushToken(): Promise<string | null> {
+  if (Platform.OS === 'web') return null;
+  try {
+    const perm = await Notifications.getPermissionsAsync();
+    if (!perm.granted) return null;
+    const projectId =
+      (Constants.expoConfig?.extra as { eas?: { projectId?: string } } | undefined)?.eas?.projectId ||
+      (Constants as { easConfig?: { projectId?: string } }).easConfig?.projectId ||
+      '';
+    if (!projectId) return null;
+    const token = await Notifications.getExpoPushTokenAsync({ projectId });
+    return typeof token?.data === 'string' && token.data.trim() ? token.data.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Strip outbound SMS prefix `photoSlot)__` so we never duplicate it in the notification. */
 function stripLeadingSmsSlotPrefix(body: string): string {
   return String(body || '')
@@ -67,8 +86,8 @@ function stripLeadingSmsSlotPrefix(body: string): string {
 }
 
 /**
- * Same layout as in-app QCM payload (line1 = `q)` + first 11 stem chars + ` ...`, line2 = compact).
- * No `__`. Matches e.g. `1)first eleven …\n1A-2B-3A` or `7)first eleven …\n7B-8D-9A`.
+ * Same layout as in-app QCM payload (line1 = `group)__q) first10...`, line2 = compact).
+ * No `slot)__` prefix.
  */
 function formatAnswerNotificationBody(body: string, slot?: number | null): string {
   let t = String(body || '').trim();

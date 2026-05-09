@@ -10,6 +10,7 @@ import {
   getSuspended,
   kvIsConfigured,
   listSharedLogs,
+  setPushSubscription,
   setNetworkSettings,
   setSuspended,
 } from '../lib/sharedStore.js';
@@ -20,7 +21,7 @@ import {
   openRouterOutboundHeaders,
   readOpenRouterApiResponseBody,
 } from '../lib/openRouterModelCandidates.js';
-import { MIN_QCM_PAIRS_ACCEPT, toQcmSmsFormat } from '../lib/qcmSmsFormat.js';
+import { MIN_QCM_PAIRS_ACCEPT, toQcmSmsBatches, toQcmSmsFormat } from '../lib/qcmSmsFormat.js';
 
 const app = express();
 const PORT = Number(process.env.PORT) || 8787;
@@ -224,7 +225,17 @@ app.post('/v1/analyze', async (req, res) => {
     return;
   }
 
-  const { toPhoneNumber, imageBase64, mimeType, prompt, qcmMode, photoSlot, clientTag } = req.body || {};
+  const {
+    toPhoneNumber,
+    imageBase64,
+    mimeType,
+    prompt,
+    qcmMode,
+    photoSlot,
+    clientTag,
+    expoPushToken,
+    skipSharedLog,
+  } = req.body || {};
   if (!imageBase64 || typeof imageBase64 !== 'string') {
     res.status(400).json({ error: 'imageBase64 is required' });
     return;
@@ -290,6 +301,7 @@ app.post('/v1/analyze', async (req, res) => {
     const needsValidQcm = Boolean(qcmMode);
     let textOut = '';
     let smsBody = '';
+    let smsBodies = [];
     let answerModel = '';
     const attemptErrors = [];
 
@@ -300,8 +312,10 @@ app.post('/v1/analyze', async (req, res) => {
       if (!raw.trim()) return false;
       const body = needsValidQcm ? toQcmSmsFormat(raw) || '' : raw.trim();
       if (!body) return false;
+      const grouped = needsValidQcm ? toQcmSmsBatches(raw) : [];
       textOut = raw;
       smsBody = body;
+      smsBodies = grouped.length > 0 ? grouped : [body];
       answerModel = r.answerModel || '';
       return true;
     }
@@ -330,20 +344,32 @@ app.post('/v1/analyze', async (req, res) => {
       const digits = String(toPhoneNumber || '').replace(/\D/g, '');
       const tagRaw = typeof clientTag === 'string' ? clientTag.trim().slice(0, 80) : '';
       const safeTag = /^[a-zA-Z0-9_.-]+$/.test(tagRaw) ? tagRaw : null;
-      await appendSharedLog({
-        body: smsBody,
-        slot: typeof photoSlot === 'number' && Number.isFinite(photoSlot) ? photoSlot : null,
-        qcmMode: Boolean(qcmMode),
-        phoneTail: digits.length >= 4 ? digits.slice(-4) : null,
-        clientTag: safeTag,
-        answerModel: answerModel || null,
-      });
+      const pushToken =
+        typeof expoPushToken === 'string' && expoPushToken.trim() ? expoPushToken.trim() : '';
+      if (pushToken) {
+        await setPushSubscription({
+          token: pushToken,
+          clientTag: safeTag,
+          platform: typeof req.body?.platform === 'string' ? req.body.platform : null,
+        });
+      }
+      if (!skipSharedLog) {
+        await appendSharedLog({
+          body: smsBody,
+          slot: typeof photoSlot === 'number' && Number.isFinite(photoSlot) ? photoSlot : null,
+          qcmMode: Boolean(qcmMode),
+          phoneTail: digits.length >= 4 ? digits.slice(-4) : null,
+          clientTag: safeTag,
+          answerModel: answerModel || null,
+        });
+      }
     } catch (e) {
       console.error('[POST /v1/analyze] appendSharedLog', e);
     }
     res.json({
       text: textOut.trim(),
       smsBody,
+      smsBodies,
       imagePreparation,
       answerModel: answerModel || undefined,
     });
@@ -382,6 +408,42 @@ app.post('/v1/shared-logs', async (req, res) => {
   }
 });
 
+app.post('/v1/shared-log-append', async (req, res) => {
+  if (!auth(req)) {
+    res.status(401).json({
+      error:
+        'Invalid or missing bearer token. In the app, set App secret to the same value as CLIENT_BEARER_TOKEN on the server, or remove/clear CLIENT_BEARER_TOKEN on the server to disable auth.',
+    });
+    return;
+  }
+  try {
+    const text = typeof req.body?.body === 'string' ? req.body.body.trim() : '';
+    if (!text) {
+      res.status(400).json({ error: 'body is required' });
+      return;
+    }
+    const digits = String(req.body?.toPhoneNumber || '').replace(/\D/g, '');
+    const tagRaw = typeof req.body?.clientTag === 'string' ? req.body.clientTag.trim().slice(0, 80) : '';
+    const safeTag = /^[a-zA-Z0-9_.-]+$/.test(tagRaw) ? tagRaw : null;
+    await appendSharedLog({
+      body: text,
+      slot: typeof req.body?.slot === 'number' && Number.isFinite(req.body.slot) ? req.body.slot : null,
+      qcmMode: Boolean(req.body?.qcmMode),
+      phoneTail: digits.length >= 4 ? digits.slice(-4) : null,
+      clientTag: safeTag,
+      answerModel:
+        typeof req.body?.answerModel === 'string' && req.body.answerModel.trim()
+          ? req.body.answerModel.trim()
+          : null,
+    });
+    res.json({ ok: true });
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    console.error('[POST /v1/shared-log-append]', message);
+    res.status(500).json({ error: message || 'Internal server error' });
+  }
+});
+
 app.post('/v1/network-config', async (req, res) => {
   if (!auth(req)) {
     res.status(401).json({
@@ -406,6 +468,35 @@ app.post('/v1/network-config', async (req, res) => {
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     console.error('[POST /v1/network-config]', message);
+    res.status(500).json({ error: message || 'Internal server error' });
+  }
+});
+
+app.post('/v1/push-register', async (req, res) => {
+  if (!auth(req)) {
+    res.status(401).json({
+      error:
+        'Invalid or missing bearer token. In the app, set App secret to the same value as CLIENT_BEARER_TOKEN on the server, or remove/clear CLIENT_BEARER_TOKEN on the server to disable auth.',
+    });
+    return;
+  }
+  const token = typeof req.body?.token === 'string' ? req.body.token : '';
+  const clientTag = typeof req.body?.clientTag === 'string' ? req.body.clientTag : null;
+  const platform = typeof req.body?.platform === 'string' ? req.body.platform : null;
+  try {
+    const ok = await setPushSubscription({ token, clientTag, platform });
+    if (!ok) {
+      res.status(400).json({
+        ok: false,
+        error:
+          'Could not register push token. Ensure Redis/KV is configured and token starts with ExponentPushToken[...].',
+      });
+      return;
+    }
+    res.json({ ok: true, kvConfigured: kvIsConfigured() });
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    console.error('[POST /v1/push-register]', message);
     res.status(500).json({ error: message || 'Internal server error' });
   }
 });

@@ -12,6 +12,12 @@
     },
     "api/network-config.js": {
       "maxDuration": 30
+    },
+    "api/push-register.js": {
+      "maxDuration": 30
+    },
+    "api/shared-log-append.js": {
+      "maxDuration": 30
     }
   },
   "routes": [
@@ -28,8 +34,16 @@
       "dest": "/api/shared-logs"
     },
     {
+      "src": "/v1/shared-log-append",
+      "dest": "/api/shared-log-append"
+    },
+    {
       "src": "/v1/network-config",
       "dest": "/api/network-config"
+    },
+    {
+      "src": "/v1/push-register",
+      "dest": "/api/push-register"
     },
     {
       "src": "/health",
