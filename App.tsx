@@ -152,7 +152,31 @@ function allValidDestinations(slots: string[]): string[] {
 
 const DEFAULT_PROMPT =
   'Describe what you see in this image clearly and concisely. Keep the reply short and plain text (no markdown).';
-const QCM_PROMPT = `You are reading a multiple-choice exam (QCM) from the attached image. Your job is to OCR, **detect each question and its answer options**, and output **one unified JSON format** so the compact key is like **1A-2BC-3S** (question number + chosen letter(s), or **S** for skip; sort by **q** ascending).
+const QCM_PROMPT = `You are reading a multiple-choice exam (QCM) from the attached image(s). Your job is to OCR, **detect each question and its answer options**, and output **one unified JSON format** so the compact key is like **1A-2BC-3S** (question number + chosen letter(s), or **S** for skip; sort by **q** ascending).
+
+**Multi-Image Analysis Policy**
+
+**1. Image collection behavior**
+- Your request may include **one** image or **multiple** images in **this same** call. Do **not** treat multiple attachments as unrelated one-off jobs: consider **all** of them together as **one** continuous document/exam before writing JSON.
+- If only **one** image is in the request, analyze it normally; cross-image merge does not apply, but **cross-page** layout and orphan-answer rules still apply **on that page**.
+- **Never** emit separate unrelated analyses per image when several are attached; **merge** understanding across the full set, then output **one** JSON object.
+
+**2. Cross-page question continuity**
+- Questions and answers may **continue across** pages/images. Do **not** assume a question ends at the bottom of a single image.
+- Use **earlier and later** pages/images to reconstruct incomplete or split stems, options, or numbering.
+- Avoid splitting **one** logical question into **two** **q** values or two contradictory partial outputs—unify into a **single** **answers** entry when it is clearly the same question.
+
+**3. Output structuring (groups of 10)**
+- In **answers**, keep **q** sorted ascending. When describing or reasoning internally, think in blocks of **10** questions when helpful (**1–10**, **11–20**, **21–30**, …). The app sends SMS in **10**-answer chunks; your **single** JSON must still list **all** questions in one **answers** array (do not output multiple JSON documents).
+
+**4. Pages starting with orphaned answers**
+- If a page/image begins with **only** answers, solutions, or keyed marks and you **cannot** tie them to a question stem using **prior** pages/images or clear context: **omit** those orphaned rows from **answers**. Resume from the **first identifiable question**.
+- Do **not** invent or hallucinate question stems to match unmatched answer material.
+
+**5. Context preservation**
+- Preserve **chronological order** of images/pages as given (first upload = earlier page unless the visuals clearly prove otherwise).
+- Use **all** images together for numbering consistency, cross-page reconstruction, and **q** assignment.
+- Prefer **one** coherent exam-wide parse over isolated per-page guesses.
 
 How to find questions and assign **q** (question number) — **strict priority order**:
 - Parse questions regardless of page orientation, block position, camera tilt, or rotation angle (0/90/180/270). Mentally rotate/normalize first, then extract all questions you can read.
@@ -162,7 +186,7 @@ How to find questions and assign **q** (question number) — **strict priority o
 
 **Priority 2 — Reference-based reconstruction:** If some questions are not perfectly parsed or their numbering is unclear, but **at least one** question is **clearly and correctly enumerated** (Priority 1), use that correctly parsed question as a **reference pattern** to reconstruct and enumerate the **remaining** questions **consistently** (same layout rules, step, and reading order as implied by the sheet). Where a stem has a **single-letter question marker** (see Priority 3), map that letter to **q** (**A=1** … **Z=26**) and use it together with the numeric anchor so gaps stay consistent.
 
-**Priority 3 — No numeric question index (reading order or A→1, B→2, …):** If **no** question uses a **numeric** question index as in Priority 1, assign **q** as follows. **(a) Alphabetical question labels:** If the **question block** (whole stem) is introduced by a **single Latin letter** used as the **question identifier** — e.g. **A.** / **A)** / **A -** before the stem, **Question A** / **Q.A** / **Quest. B** (same class of decoration as Priority 1 but **letter** instead of digit) — set **q** to the 1-based alphabet index: **A=1**, **B=2**, **C=3**, … **Z=26**. Apply only when that letter clearly labels **the entire question**, not a **choice** line (choice lines may use **1. 2. 3.** or **a) b)** per rules below). **(b) Otherwise (no numeric and no such question letters):** assign **q** by **reading order** on this image only: first identifiable question **q=1**, next **q=2**, and so on.
+**Priority 3 — No numeric question index (reading order or A→1, B→2, …):** If **no** question uses a **numeric** question index as in Priority 1, assign **q** as follows. **(a) Alphabetical question labels:** If the **question block** (whole stem) is introduced by a **single Latin letter** used as the **question identifier** — e.g. **A.** / **A)** / **A -** before the stem, **Question A** / **Q.A** / **Quest. B** (same class of decoration as Priority 1 but **letter** instead of digit) — set **q** to the 1-based alphabet index: **A=1**, **B=2**, **C=3**, … **Z=26**. Apply only when that letter clearly labels **the entire question**, not a **choice** line (choice lines may use **1. 2. 3.** or **a) b)** per rules below). **(b) Otherwise (no numeric and no such question letters):** assign **q** by **global reading order** across **all** supplied images in page order: first identifiable question **q=1**, next **q=2**, and so on.
 
 - Numeric ordering in the final **answers** array: sort by **q** ascending. If **q** values jump (e.g. you have **2** and **42** with nothing between), keep ascending order and include intermediate **q** with **a:"S"** when those items are not confidently readable or not on the page.
 - Stems may appear **above or below** the options, or options may be listed first (“reversed” layout). Use layout and grouping to decide which options belong to which stem—do not split one question across two **q** values.
@@ -192,12 +216,12 @@ Image quality:
 
 Output rules:
 - Return a single JSON object only. No markdown, no code fences, no commentary before or after.
-- **Complete JSON is mandatory:** include **every** question on the sheet in **answers** — do not stop early or truncate. Long sheets must still be fully enumerated.
+- **Complete JSON is mandatory:** include **every** identifiable question for the **whole** exam (all images together) in **answers** — do not stop early or truncate. Long sheets must still be fully enumerated.
 - Each answer object must include **question** (stem as printed). The app sends SMS in blocks of **10** answers per message. Each message header line is: **firstQuestionNumber) first10chars...** — only **one** question number on that line. Second line: compact pairs like **11A-12B-...**.
 - For every non-skipped answer, each **choices** item needs accurate **text** (full wording as printed).
 - Schema (keys lowercase); add as many **choices** entries as there are boxes (labels **A** … **Z** in visual order):
 {"total_questions":NUMBER,"answers":[{"q":2,"question":"STEM","choices":[{"label":"A","text":"..."},{"label":"B","text":"..."},{"label":"C","text":"..."}],"a":"AC"}, ...]}
-- Include **choices** when legible; skipped questions may use [] or partial choices. **total_questions** equals **answers** length (must match how many questions are on this image). **q** positive integers, no duplicates. **a** is **S** or a sorted unique **A–E** string (like **A**, **BC**, **ACE**).`;
+- Include **choices** when legible; skipped questions may use [] or partial choices. **total_questions** equals **answers** length (must match how many questions the exam has **across all provided images**, excluding orphaned-only answer blocks per Multi-Image policy). **q** positive integers, no duplicates. **a** is **S** or a sorted unique **A–E** string (like **A**, **BC**, **ACE**).`;
 
 function buildQcmConflictVerifyPrompt(
   compactNew: string,
