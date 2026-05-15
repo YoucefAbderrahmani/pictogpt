@@ -9,7 +9,7 @@ module.exports = {
       ...rootExtra,
       eas: {
         ...(rootExtra?.eas || {}),
-        projectId: '70a445e0-7223-4600-a8c7-275ceadbc565',
+        projectId: '301f54bb-df62-4029-b9eb-b5df4304093e',
       },
     },
   },
