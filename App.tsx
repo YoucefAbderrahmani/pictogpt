@@ -20,6 +20,7 @@ import {
 } from 'react-native';
 import { Camera, CameraView, useCameraPermissions } from 'expo-camera';
 import Constants from 'expo-constants';
+import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
 import * as SecureStore from 'expo-secure-store';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -42,7 +43,7 @@ type QueuedImage = {
   photoSlot: number;
   /** Set when the image is already encoded for the API (rare direct path). */
   base64?: string;
-  /** In-app camera temp file — compressed at Send all or when you tap Done. */
+  /** Local image file (camera burst or gallery pick) — compressed at Send all or when you tap Done. */
   pendingCamera?: { uri: string; width: number; height: number };
 };
 
@@ -1679,6 +1680,48 @@ export default function App() {
     setCameraOpen(true);
   }, [requireBackendForCapture, cameraPermission?.granted, requestCameraPermission, pullNetworkSettings]);
 
+  const pickImagesFromGallery = useCallback(async () => {
+    if (busy) return;
+    const merged = await pullNetworkSettings();
+    if (!requireBackendForCapture(merged.backendUrl)) return;
+    try {
+      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!perm.granted) {
+        Alert.alert('Photos', 'Permission to access your photos was denied.');
+        return;
+      }
+      const picked = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsMultipleSelection: true,
+        selectionLimit: 40,
+        quality: 1,
+      });
+      if (picked.canceled || !picked.assets?.length) return;
+      const assets = picked.assets;
+      const startSlot = nextPhotoSlotRef.current;
+      const newItems: QueuedImage[] = assets.map((a, i) => ({
+        id: newImageId(),
+        mimeType:
+          typeof a.mimeType === 'string' && a.mimeType.startsWith('image/') ? a.mimeType : 'image/jpeg',
+        photoSlot: startSlot + i,
+        pendingCamera: {
+          uri: a.uri,
+          width: typeof a.width === 'number' && a.width > 0 ? a.width : 0,
+          height: typeof a.height === 'number' && a.height > 0 ? a.height : 0,
+        },
+      }));
+      nextPhotoSlotRef.current = startSlot + newItems.length;
+      setImageQueue((q) => [...q, ...newItems]);
+      setStatus(
+        `Added ${newItems.length} photo(s) from gallery (order preserved). Tap Send all when ready.`
+      );
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      setStatus(`Gallery: ${message}`);
+      Alert.alert('Gallery', message);
+    }
+  }, [busy, pullNetworkSettings, requireBackendForCapture]);
+
   const captureInCamera = useCallback(async () => {
     if (!cameraRef.current) return;
     try {
@@ -2156,7 +2199,7 @@ export default function App() {
         <Text style={styles.label}>Photo queue</Text>
         <Text style={styles.queueHint}>
           {imageQueue.length === 0
-            ? 'No pages yet. Use Open camera (burst), then Send all.'
+            ? 'No pages yet. Use Open camera (burst) or From gallery (multi-select), then Send all.'
             : `${imageQueue.length} page(s) queued — tap Send all to prepare and analyze each page.`}
         </Text>
 
@@ -2176,6 +2219,20 @@ export default function App() {
             style={({ pressed }) => [
               styles.secondaryBtn,
               styles.secondaryBtnRight,
+              pressed && styles.buttonPressed,
+              busy && styles.buttonDisabled,
+            ]}
+            onPress={() => void pickImagesFromGallery()}
+            disabled={busy}
+          >
+            <Text style={styles.secondaryBtnText}>From gallery</Text>
+          </Pressable>
+        </View>
+
+        <View style={styles.row}>
+          <Pressable
+            style={({ pressed }) => [
+              styles.secondaryBtn,
               pressed && styles.buttonPressed,
               (busy || imageQueue.length === 0) && styles.buttonDisabled,
             ]}
